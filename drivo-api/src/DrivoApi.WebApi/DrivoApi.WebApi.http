@@ -1,0 +1,6 @@
+@DrivoApi.WebApi_HostAddress = http://localhost:5270
+
+GET {{DrivoApi.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

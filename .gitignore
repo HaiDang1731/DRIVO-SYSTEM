@@ -1,0 +1,54 @@
+﻿# ═══════════════════════════════════════
+# .NET / ASP.NET Core (drivo-api)
+# ═══════════════════════════════════════
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.DotSettings.user
+appsettings.Development.json
+
+# ═══════════════════════════════════════
+# Node.js / React (drivo-admin)
+# ═══════════════════════════════════════
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+
+# ═══════════════════════════════════════
+# Flutter / Dart (drivo-mobile)
+# ═══════════════════════════════════════
+.dart_tool/
+.packages
+build/
+*.iml
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+android/.gradle/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+*.lock
+
+# ═══════════════════════════════════════
+# JetBrains IDE
+# ═══════════════════════════════════════
+.idea/
+
+# ═══════════════════════════════════════
+# OS files
+# ═══════════════════════════════════════
+.DS_Store
+Thumbs.db
+desktop.ini
