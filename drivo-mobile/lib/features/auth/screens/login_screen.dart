@@ -1,8 +1,8 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../core/api_service.dart';
-import '../../core/theme.dart';
+import '../../../core/api_service.dart';
+import '../../../core/theme.dart';
 
 class LoginScreen extends StatefulWidget {
   final Function(AuthUser) onLogin;

@@ -1,9 +1,8 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../core/api_service.dart';
-import 'booking/screens/customer_booking_screen.dart';
+import '../../../../../core/api_service.dart';
+import '../../booking/screens/customer_booking_screen.dart';
 
 // ═══════════════════════════════════════════════
 //   DRIVO Customer Home Screen  — Premium Design
@@ -58,8 +57,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
-    _floatCtrl.dispose();
+    _pulseCtrl?.dispose();
+    _floatCtrl?.dispose();
     super.dispose();
   }
 

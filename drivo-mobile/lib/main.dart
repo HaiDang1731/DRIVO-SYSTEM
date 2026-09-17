@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'core/api_service.dart';
 import 'core/theme.dart';
-import 'features/auth/login_screen.dart';
-import 'features/driver/driver_home_screen.dart';
-import 'features/customer/customer_home_screen.dart';
+import 'features/auth/screens/login_screen.dart';
+import 'features/driver/home/screens/driver_home_screen.dart';
+import 'features/customer/home/screens/customer_home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
