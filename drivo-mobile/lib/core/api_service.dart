@@ -273,6 +273,18 @@ class ApiService {
   }
 
   // Auth
+  static Future<Map<String, dynamic>> register({
+    required String fullName,
+    required String phone,
+    required String password,
+    String role = 'CUSTOMER',
+  }) => post('/auth/register', {
+    'fullName': fullName,
+    'phone': phone,
+    'password': password,
+    'role': role,
+  });
+
   static Future<Map<String, dynamic>> login(String phone, String password) =>
       post('/auth/login', {'phone': phone, 'password': password});
 
