@@ -28,10 +28,10 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   int _currentTab = 0;
   BookingDetail? _activeBooking;
 
-  late AnimationController _pulseCtrl;
-  late AnimationController _floatCtrl;
-  late Animation<double> _pulseAnim;
-  late Animation<double> _floatAnim;
+  AnimationController? _pulseCtrl;
+  AnimationController? _floatCtrl;
+  Animation<double>? _pulseAnim;
+  Animation<double>? _floatAnim;
 
   @override
   void initState() {
@@ -47,10 +47,10 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     )..repeat(reverse: true);
 
     _pulseAnim = Tween<double>(begin: 0.95, end: 1.05).animate(
-      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+      CurvedAnimation(parent: _pulseCtrl!, curve: Curves.easeInOut),
     );
     _floatAnim = Tween<double>(begin: -6.0, end: 6.0).animate(
-      CurvedAnimation(parent: _floatCtrl, curve: Curves.easeInOut),
+      CurvedAnimation(parent: _floatCtrl!, curve: Curves.easeInOut),
     );
 
     _checkActiveBooking();
@@ -109,8 +109,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
             user: widget.user,
             activeBooking: _activeBooking,
             onOpenBooking: _openBooking,
-            pulseAnim: _pulseAnim,
-            floatAnim: _floatAnim,
+            pulseAnim: _pulseAnim ?? const AlwaysStoppedAnimation(1.0),
+            floatAnim: _floatAnim ?? const AlwaysStoppedAnimation(0.0),
           ),
           _ActivityTabView(user: widget.user, onOpenBooking: _openBooking),
           _SupportTabView(),
