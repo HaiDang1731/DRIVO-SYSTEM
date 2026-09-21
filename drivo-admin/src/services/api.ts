@@ -22,8 +22,8 @@ export const api = {
   },
 
   // Auth
-  login: (phone: string, password: string) =>
-    api.request('/auth/login', { method: 'POST', body: JSON.stringify({ phone, password }) }),
+  login: (email: string, password: string) =>
+    api.request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
 
   logout: (refreshToken: string) =>
     api.request('/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken }) }),

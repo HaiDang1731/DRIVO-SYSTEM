@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/api_service.dart';
@@ -60,7 +62,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         final data = loginRes['data'];
         await ApiService.saveTokens(data['accessToken'], data['refreshToken']);
         final user = AuthUser.fromJson(data['user']);
-        if (mounted) widget.onLogin(user);
+        
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_json', jsonEncode(data['user']));
+        
+        if (mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          widget.onLogin(user);
+        }
       } else {
         if (mounted) {
           setState(() {

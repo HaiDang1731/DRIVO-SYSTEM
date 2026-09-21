@@ -56,6 +56,8 @@ class CustomerVehicle {
     isDefault: j['isDefault'] ?? false,
   );
 
+  String get displayInfo => '${brand ?? ''} ${model ?? ''} - $licensePlate'.trim();
+
   String get displayName {
     final name = '${brand ?? ""} ${model ?? ""}'.trim();
     return name.isEmpty ? licensePlate : '$name ($licensePlate)';
@@ -208,6 +210,97 @@ class DriverProfile {
   );
 }
 
+
+// ── Driver Booking model ───────────────────────────────────────
+class DriverBooking {
+  final int id;
+  final String bookingCode;
+  final String status;
+  final String pickupAddress;
+  final String destinationAddress;
+  final double estimatedPrice;
+  final double estimatedDistanceKm;
+  final int estimatedDurationMin;
+  final String vehiclePlate;
+  final String vehicleBrand;
+  final String vehicleModel;
+  final String vehicleTransmission;
+  final String? customerNote;
+  final double? finalPrice;
+  final DateTime createdAt;
+
+  DriverBooking({
+    required this.id,
+    required this.bookingCode,
+    required this.status,
+    required this.pickupAddress,
+    required this.destinationAddress,
+    required this.estimatedPrice,
+    required this.estimatedDistanceKm,
+    required this.estimatedDurationMin,
+    required this.vehiclePlate,
+    required this.vehicleBrand,
+    required this.vehicleModel,
+    required this.vehicleTransmission,
+    this.customerNote,
+    this.finalPrice,
+    required this.createdAt,
+  });
+
+  factory DriverBooking.fromJson(Map<String, dynamic> j) {
+    final v = j['vehicle'] ?? {};
+    return DriverBooking(
+      id: j['id'],
+      bookingCode: j['bookingCode'] ?? '',
+      status: j['status'] ?? '',
+      pickupAddress: j['pickupAddress'] ?? '',
+      destinationAddress: j['destinationAddress'] ?? '',
+      estimatedPrice: (j['estimatedPrice'] as num?)?.toDouble() ?? 0,
+      estimatedDistanceKm: (j['estimatedDistanceKm'] as num?)?.toDouble() ?? 0,
+      estimatedDurationMin: j['estimatedDurationMin'] ?? 0,
+      vehiclePlate: v['licensePlate'] ?? '',
+      vehicleBrand: v['brand'] ?? '',
+      vehicleModel: v['model'] ?? '',
+      vehicleTransmission: v['transmission'] ?? '',
+      customerNote: j['customerNote'],
+      createdAt: DateTime.tryParse(j['createdAt'] ?? '') ?? DateTime.now(),
+    );
+  }
+
+  String get statusDisplay {
+    switch (status) {
+      case 'SearchingDriver': return 'Đang tìm tài xế';
+      case 'DriverAccepted': return 'Đã nhận cuốc';
+      case 'DriverArriving': return 'Đang đến điểm đón';
+      case 'DriverArrived': return 'Đã đến điểm đón';
+      case 'InProgress': return 'Đang chạy';
+      case 'Completed': return 'Hoàn thành';
+      case 'Cancelled': return 'Đã hủy';
+      default: return status;
+    }
+  }
+
+  String get nextStatusAction {
+    switch (status) {
+      case 'DriverAccepted': return 'DriverArriving';
+      case 'DriverArriving': return 'DriverArrived';
+      case 'DriverArrived': return 'InProgress';
+      case 'InProgress': return 'Completed';
+      default: return '';
+    }
+  }
+
+  String get nextStatusLabel {
+    switch (status) {
+      case 'DriverAccepted': return '🚗 Bắt đầu đến đón';
+      case 'DriverArriving': return '📍 Đã đến điểm đón';
+      case 'DriverArrived': return '▶️ Bắt đầu chạy';
+      case 'InProgress': return '✅ Hoàn thành chuyến';
+      default: return '';
+    }
+  }
+}
+
 // ── API Service ────────────────────────────────────────────────
 class ApiService {
   static const String baseUrl = 'http://192.168.110.65:5270/api/v1';
@@ -255,7 +348,13 @@ class ApiService {
 
   static Future<Map<String, dynamic>> get(String path) async {
     final res = await http.get(Uri.parse('$baseUrl$path'), headers: _headers);
-    return jsonDecode(utf8.decode(res.bodyBytes));
+    final body = utf8.decode(res.bodyBytes).trim();
+    if (body.isEmpty) return {'success': false, 'message': 'Empty response'};
+    try {
+      return jsonDecode(body);
+    } catch (_) {
+      return {'success': false, 'message': 'Invalid JSON response'};
+    }
   }
 
   static Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) async {
@@ -291,6 +390,8 @@ class ApiService {
   static Future<Map<String, dynamic>> logout() =>
       post('/auth/logout', {'refreshToken': _refreshToken ?? ''});
 
+  static Future<Map<String, dynamic>> updateUserProfile(Map<String, dynamic> data) => put('/auth/profile', data);
+  static Future<Map<String, dynamic>> changeUserPassword(String current, String newPw) => put('/auth/password', {'currentPassword': current, 'newPassword': newPw});
   static Future<Map<String, dynamic>> getMe() => get('/auth/me');
 
   // Customer Vehicles
@@ -302,6 +403,8 @@ class ApiService {
   static Future<Map<String, dynamic>> estimateFare(Map<String, dynamic> data) => post('/bookings/estimate', data);
   static Future<Map<String, dynamic>> createBooking(Map<String, dynamic> data) => post('/bookings', data);
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');
+  static Future<Map<String, dynamic>> getBookingById(int id) => get('/bookings/$id');
+  static Future<Map<String, dynamic>> rateDriver(int bookingId, int score, String comment) => post('/bookings/$bookingId/rate', {'score': score, 'comment': comment});
   static Future<Map<String, dynamic>> cancelBooking(int id, String reason) => post('/bookings/$id/cancel', {'reason': reason});
   static Future<Map<String, dynamic>> getCustomerHistory() => get('/bookings/customer-history');
 
@@ -310,4 +413,20 @@ class ApiService {
   static Future<Map<String, dynamic>> updateDriverProfile(Map<String, dynamic> data) => put('/driver/profile', data);
   static Future<Map<String, dynamic>> changePassword(String current, String newPw) =>
       post('/driver/change-password', {'currentPassword': current, 'newPassword': newPw});
+  // Driver Booking
+  static Future<Map<String, dynamic>> toggleDriverStatus(bool isOnline) =>
+      post('/driver/toggle-status', {'isOnline': isOnline});
+  static Future<Map<String, dynamic>> getDriverPendingBookings() =>
+      get('/driver/pending-bookings');
+  static Future<Map<String, dynamic>> acceptBooking(int id) =>
+      post('/driver/bookings/$id/accept', {});
+  static Future<Map<String, dynamic>> updateBookingStatus(int id, String status) =>
+      post('/driver/bookings/$id/update-status', {'status': status});
+  static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reason) =>
+      post('/driver/bookings/$id/cancel', {'reason': reason});
+  static Future<Map<String, dynamic>> getDriverActiveBooking() =>
+      get('/driver/bookings/active');
+  static Future<Map<String, dynamic>> getDriverHistory({int page = 1}) =>
+      get('/driver/bookings/history?page=$page');
+
 }

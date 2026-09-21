@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../core/api_service.dart';
 import '../../../../core/theme.dart';
 
-/// Màn hình Đặt chuyến DRIVO mô phỏng chuẩn xác 100% giao diện "Let Me Drive"
+/// Màn hình Đặt chuyến DRIVO
 class CustomerBookingScreen extends StatefulWidget {
   final AuthUser user;
   final BookingDetail? initialActiveBooking;
@@ -51,6 +52,8 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   // Animation radar tìm tài xế
   late AnimationController _radarController;
 
+  Timer? _pollingTimer;
+
   @override
   void initState() {
     super.initState();
@@ -62,11 +65,13 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
 
     _loadVehicles();
     _fetchEstimate();
+    if (_activeBooking != null) _startPolling();
   }
 
   @override
   void dispose() {
     _radarController.dispose();
+    _pollingTimer?.cancel();
     super.dispose();
   }
 
@@ -134,7 +139,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
       final res = await ApiService.createBooking({
         'pickupAddress': _pickupAddress,
         'destinationAddress': _destinationAddress,
-        'vehicleId': _selectedVehicle!.id,
+        'customerVehicleId': _selectedVehicle!.id,
         'customerNote': '$_customerNote | Xe điện gấp: ${_allowFoldingScooter ? "Có" : "Không"} | PT: $_paymentMethod',
       });
 
@@ -145,6 +150,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             _activeBooking = booking;
             _submitting = false;
           });
+          _startPolling();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Đã gửi yêu cầu chuyến đi #${booking.bookingCode}!'),
@@ -173,6 +179,157 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     }
   }
 
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollActiveBooking());
+  }
+
+  void _stopPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
+  }
+
+  Future<void> _pollActiveBooking() async {
+    if (!mounted || _activeBooking == null) return;
+
+    // Poll by booking ID to detect Completed status
+    final res = await ApiService.getBookingById(_activeBooking!.id);
+    if (mounted) {
+      if (res['success'] == true && res['data'] != null) {
+        final updated = BookingDetail.fromJson(res['data']);
+        if (updated.status == 'Cancelled') {
+          setState(() { _activeBooking = null; });
+          _stopPolling();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Chuyến đi đã bị hủy.'), backgroundColor: Color(0xFFE53935)
+          ));
+        } else if (updated.status == 'Completed') {
+          _stopPolling();
+          _showRatingDialog(updated);
+        } else {
+          setState(() { _activeBooking = updated; });
+        }
+      } else {
+        setState(() { _activeBooking = null; });
+        _stopPolling();
+      }
+    }
+  }
+
+  void _showRatingDialog(BookingDetail completedBooking) {
+    int rating = 5;
+    final commentController = TextEditingController();
+    bool isSubmitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      isDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Container(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          decoration: const BoxDecoration(
+            color: Color(0xFF1E293B),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 48, height: 4,
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const Icon(Icons.check_circle_rounded, color: Color(0xFF22C55E), size: 64),
+                const SizedBox(height: 12),
+                const Text('Chuyến đi đã hoàn thành!',
+                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                const Text('Vui lòng đánh giá tài xế của bạn',
+                    style: TextStyle(color: Colors.white60, fontSize: 14)),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (i) => GestureDetector(
+                    onTap: () => setModalState(() => rating = i + 1),
+                    child: Icon(
+                      i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
+                      color: const Color(0xFFFACC15),
+                      size: 44,
+                    ),
+                  )),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: commentController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Nhận xét thêm (không bắt buộc)...',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.all(12),
+                  ),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: isSubmitting ? null : () async {
+                      setModalState(() => isSubmitting = true);
+                      try {
+                        await ApiService.rateDriver(
+                            completedBooking.id, rating, commentController.text);
+                      } catch (_) {}
+                      if (mounted) {
+                        Navigator.pop(ctx);
+                        setState(() { _activeBooking = null; });
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('Cảm ơn bạn đã đánh giá!'),
+                          backgroundColor: Color(0xFF22C55E),
+                        ));
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF3B82F6),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 0,
+                    ),
+                    child: isSubmitting
+                        ? const SizedBox(width: 22, height: 22,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
+                        : const Text('Gửi Đánh Giá',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() { _activeBooking = null; });
+                  },
+                  child: const Text('Bỏ qua', style: TextStyle(color: Colors.white38)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _cancelBooking() async {
     if (_activeBooking == null || _submitting) return;
     setState(() => _submitting = true);
@@ -187,6 +344,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             _activeBooking = null;
             _submitting = false;
           });
+          _stopPolling();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Đã hủy chuyến đi thành công')),
           );
@@ -220,7 +378,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             ),
           ),
 
-          // 2. Header Top Bar (Back button, Logo Let Me Drive / DRIVO, Map layer icon)
+          // 2. Header Top Bar (Back button, Logo DRIVO, Map layer icon)
           Positioned(
             top: 0,
             left: 0,
@@ -287,7 +445,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
               ),
             ),
 
-            // Logo Thương hiệu "DRIVO" phong cách Let Me Drive
+            // Logo Thương hiệu "DRIVO" 
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -296,7 +454,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                     colors: [Color(0xFF0070E0), Color(0xFF00449E)],
                   ).createShader(bounds),
                   child: Text(
-                    'Let Me Drive',
+                    'DRIVO',
                     style: GoogleFonts.poppins(
                       fontSize: 24,
                       fontWeight: FontWeight.w800,
@@ -473,19 +631,11 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   Widget _buildMapActionChips() {
     return Row(
       children: [
-        // 1. Tư vấn
-        _buildPillChip(
-          icon: Icons.support_agent_rounded,
-          label: 'Tư vấn',
-          onTap: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Tổng đài hỗ trợ DRIVO 24/7: 1900 6868')),
-            );
-          },
-        ),
-        const SizedBox(width: 8),
-
-        // 2. Đặt trước
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [// 2. Đặt trước
         _buildPillChip(
           icon: Icons.calendar_today_rounded,
           label: 'Đặt trước',
@@ -509,7 +659,11 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             );
           },
         ),
-        const Spacer(),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
 
         // 4. Nút định vị GPS / Compass
         Container(
@@ -1341,10 +1495,19 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                     'isDefault': true,
                   });
                   if (res['success'] == true) {
-                    _loadVehicles();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Đã lưu thông tin xe!')),
-                    );
+                    await _loadVehicles();
+                    if (context.mounted) {
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Đã lưu thông tin xe!')),
+                      );
+                    }
+                  } else {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(res['message'] ?? 'Lỗi khi lưu xe')),
+                      );
+                    }
                   }
                 },
                 child: const Text('Lưu xe', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
@@ -1465,7 +1628,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   }
 }
 
-/// Widget Vẽ Bản Đồ Tương Tác Giống 100% Screenshot "Let Me Drive"
+/// Widget Vẽ Bản Đồ Tương Tác DRIVO
 class _HanoiMapCanvas extends StatelessWidget {
   final bool showRoute;
   final bool allowFoldingScooter;

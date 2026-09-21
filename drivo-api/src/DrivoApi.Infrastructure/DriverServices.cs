@@ -111,15 +111,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         if (driver == null)
             return BaseResponse<DriverDetailResponse>.Fail("Không tìm thấy tài xế.");
 
-        // Ghi log thay đổi status
-        db.DriverStatusHistories.Add(new DriverStatusHistory
-        {
-            DriverId = driver.Id,
-            OldStatus = driver.VerificationStatus.ToString(),
-            NewStatus = newStatus.ToString(),
-            ChangedAt = DateTime.UtcNow,
-            Reason = req.RejectionReason ?? $"Duyệt bởi admin #{adminUserId}"
-        });
+        
 
         driver.VerificationStatus = newStatus;
         driver.UpdatedAt = DateTime.UtcNow;
@@ -197,6 +189,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
                 LicenseNumber = d.LicenseNumber,
                 VerificationStatus = d.VerificationStatus.ToString(),
                 DriverStatus = d.DriverStatus.ToString(),
+                  AccountStatus = d.User.Status.ToString(),
                 CreatedAt = d.CreatedAt
             })
             .ToListAsync();
@@ -243,6 +236,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         LicenseClass = d.LicenseClass,
         VerificationStatus = d.VerificationStatus.ToString(),
         DriverStatus = d.DriverStatus.ToString(),
+                  AccountStatus = d.User.Status.ToString(),
         RatingAverage = d.RatingAverage,
         TotalTrips = d.TotalTrips,
         CreatedAt = d.CreatedAt,
@@ -355,6 +349,7 @@ public class DriverProfileService(DrivoDbContext db) : IDriverProfileService
         LicenseClass = d.LicenseClass,
         VerificationStatus = d.VerificationStatus.ToString(),
         DriverStatus = d.DriverStatus.ToString(),
+                  AccountStatus = d.User.Status.ToString(),
         RatingAverage = d.RatingAverage,
         TotalTrips = d.TotalTrips,
         TotalEarnings = d.TotalEarnings,

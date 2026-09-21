@@ -56,4 +56,24 @@ public class AuthController(IAuthService authService) : ControllerBase
                         .Select(c => c.Value).ToList();
         return Ok(new { UserId = userId, Roles = roles, Message = "Token hợp lệ!" });
     }
+
+    [HttpPut("profile")]
+    [Authorize]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest request)
+    {
+        var userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (!int.TryParse(userIdStr, out int userId)) return Unauthorized();
+        var result = await authService.UpdateProfileAsync(userId, request);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    [HttpPut("password")]
+    [Authorize]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (!int.TryParse(userIdStr, out int userId)) return Unauthorized();
+        var result = await authService.ChangePasswordAsync(userId, request);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
 }

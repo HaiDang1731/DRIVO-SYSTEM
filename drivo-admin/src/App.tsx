@@ -7,12 +7,13 @@ interface User { id: number; fullName: string; phone: string; email: string; rol
 interface Driver {
   driverId: number; userId: number; fullName: string; phone: string; email: string;
   licenseNumber: string; licenseClass: string; verificationStatus: string;
-  driverStatus: string; ratingAverage: number; totalTrips: number; createdAt: string;
+  driverStatus: string;
+  accountStatus: string; ratingAverage: number; totalTrips: number; createdAt: string;
   documents?: { id: number; documentType: string; fileUrl: string; verificationStatus: string; }[];
 }
 
 // ── Toast ────────────────────────────────────────────────────
-function Toast({ msg, type, onClose }: { msg: string; type: 'success'|'error'; onClose: () => void }) {
+function Toast({ msg, type, onClose }: { msg: string; type: 'success' | 'error'; onClose: () => void }) {
   useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, [onClose]);
   return (
     <div className={`toast ${type}`}>
@@ -39,14 +40,14 @@ function Avatar({ name }: { name: string }) {
 // ── Sidebar ──────────────────────────────────────────────────
 const PAGES = [
   { key: 'dashboard', icon: '⬡', label: 'Dashboard' },
-  { key: 'drivers',   icon: '🚗', label: 'Tài xế' },
+  { key: 'drivers', icon: '🚗', label: 'Tài xế' },
   { key: 'customers', icon: '👥', label: 'Khách hàng' },
-  { key: 'bookings',  icon: '📋', label: 'Chuyến đi' },
-  { key: 'payments',  icon: '💳', label: 'Thanh toán' },
+  { key: 'bookings', icon: '📋', label: 'Chuyến đi' },
+  { key: 'payments', icon: '💳', label: 'Thanh toán' },
 ];
 
 function Sidebar({ page, setPage, user, onLogout }:
-  { page: string; setPage: (p: string) => void; user: User|null; onLogout: () => void }) {
+  { page: string; setPage: (p: string) => void; user: User | null; onLogout: () => void }) {
   return (
     <div className="sidebar">
       <div className="sidebar-logo">
@@ -80,7 +81,7 @@ function Sidebar({ page, setPage, user, onLogout }:
 
 // ── Login Page ───────────────────────────────────────────────
 function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
-  const [phone, setPhone] = useState('0900000000');
+  const [email, setEmail] = useState('admin@drivo.local');
   const [password, setPassword] = useState('Admin@123');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -88,7 +89,7 @@ function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true); setError('');
-    const res = await api.login(phone, password);
+    const res = await api.login(email, password);
     setLoading(false);
     if (res.success) {
       api.setToken(res.data.accessToken);
@@ -109,14 +110,14 @@ function LoginPage({ onLogin }: { onLogin: (user: User) => void }) {
         {error && <div className="error-msg">⚠️ {error}</div>}
         <form onSubmit={handleLogin}>
           <div className="form-group">
-            <label className="form-label">Số điện thoại</label>
-            <input className="form-input" value={phone} onChange={e => setPhone(e.target.value)}
-              placeholder="0900000000" required />
+            <label className="form-label">Email</label>
+            <input className="form-input" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="Nhập địa chỉ email..." required />
           </div>
           <div className="form-group">
             <label className="form-label">Mật khẩu</label>
             <input className="form-input" type="password" value={password}
-              onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+              onChange={e => setPassword(e.target.value)} placeholder="Nhập mật khẩu..." required />
           </div>
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '13px', marginTop: 4 }}
             type="submit" disabled={loading}>
@@ -334,7 +335,7 @@ function DriversPage() {
   );
 
   const handleToggleLock = async (d: Driver) => {
-    const newStatus = d.verificationStatus === 'Approved' ? 'Locked' : 'Active';
+    const newStatus = d.accountStatus === 'Locked' ? 'Active' : 'Locked';
     await api.setDriverStatus(d.driverId, newStatus);
     setToast({ msg: `Đã ${newStatus === 'Locked' ? 'khóa' : 'mở khóa'} tài khoản`, type: 'success' });
     load();
@@ -432,9 +433,9 @@ function DriversPage() {
                             Chi tiết
                           </button>
                         )}
-                        <button className={`btn btn-sm ${d.driverStatus === 'Suspended' ? 'btn-success' : 'btn-danger'}`}
+                        <button className={`btn btn-sm ${d.accountStatus === 'Locked' ? 'btn-danger' : 'btn-success'}`}
                           onClick={() => handleToggleLock(d)}>
-                          {d.driverStatus === 'Suspended' ? '🔓' : '🔒'}
+                          {d.accountStatus === 'Locked' ? '🔒' : '🔓'}
                         </button>
                       </div>
                     </td>
@@ -483,11 +484,11 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case 'dashboard': return <DashboardPage />;
-      case 'drivers':   return <DriversPage />;
+      case 'drivers': return <DriversPage />;
       case 'customers': return <ComingSoon title="Khách hàng" />;
-      case 'bookings':  return <ComingSoon title="Chuyến đi" />;
-      case 'payments':  return <ComingSoon title="Thanh toán" />;
-      default:          return <DashboardPage />;
+      case 'bookings': return <ComingSoon title="Chuyến đi" />;
+      case 'payments': return <ComingSoon title="Thanh toán" />;
+      default: return <DashboardPage />;
     }
   };
 
