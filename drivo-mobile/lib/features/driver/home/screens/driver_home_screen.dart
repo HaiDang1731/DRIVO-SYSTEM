@@ -1,0 +1,1211 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import '../../../../../core/api_service.dart';
+import '../../../../../core/theme.dart';
+
+class DriverHomeScreen extends StatefulWidget {
+  final AuthUser user;
+  final VoidCallback onLogout;
+  const DriverHomeScreen({super.key, required this.user, required this.onLogout});
+
+  @override
+  State<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProviderStateMixin {
+  int _tab = 0;
+  DriverProfile? _profile;
+  bool _loadingProfile = true;
+  bool _isOnline = false;
+  bool _togglingStatus = false;
+
+  // Active booking for driver
+  DriverBooking? _activeBooking;
+
+  // Pending booking popup
+  DriverBooking? _pendingOffer;
+  bool _acceptingBooking = false;
+
+  // Polling timer
+  Timer? _pollingTimer;
+
+  // Radar animation
+  late AnimationController _radarCtrl;
+  late Animation<double> _radarAnim;
+
+  // Step update loading
+  bool _updatingStatus = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _radarCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    _radarAnim = Tween<double>(begin: 0.4, end: 1.0).animate(
+      CurvedAnimation(parent: _radarCtrl, curve: Curves.easeOut),
+    );
+    _loadProfile();
+    _loadActiveBooking();
+  }
+
+  @override
+  void dispose() {
+    _radarCtrl.dispose();
+    _pollingTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    setState(() => _loadingProfile = true);
+    final res = await ApiService.getDriverProfile();
+    if (res['success'] == true && mounted) {
+      final p = DriverProfile.fromJson(res['data']);
+      setState(() {
+        _profile = p;
+        _isOnline = p.driverStatus == 'Online';
+        _loadingProfile = false;
+      });
+      if (p.isFirstLogin) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _showChangePasswordDialog(forced: true));
+      }
+      // Start polling if online and no active booking
+      if (_isOnline && _activeBooking == null) {
+        _startPolling();
+      }
+    } else {
+      setState(() => _loadingProfile = false);
+    }
+  }
+
+  Future<void> _loadActiveBooking() async {
+    final res = await ApiService.getDriverActiveBooking();
+    if (mounted) {
+      if (res['success'] == true && res['data'] != null) {
+        setState(() {
+          _activeBooking = DriverBooking.fromJson(res['data']);
+          });
+      } else {
+        setState(() {
+          _activeBooking = null;
+          });
+      }
+    }
+  }
+
+  void _startPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollBooking());
+  }
+
+  void _stopPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
+  }
+
+  Future<void> _pollBooking() async {
+    if (!mounted || _acceptingBooking || _updatingStatus) return;
+    
+    if (_activeBooking != null) {
+      final res = await ApiService.getDriverActiveBooking();
+      if (mounted) {
+        if (res['success'] == true && res['data'] != null) {
+          final updated = DriverBooking.fromJson(res['data']);
+          if (updated.status == 'Cancelled') {
+             setState(() => _activeBooking = null);
+             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+               content: Text('Khách hàng đã hủy chuyến đi.'), backgroundColor: DrivoColors.danger
+             ));
+          } else {
+             setState(() => _activeBooking = updated);
+          }
+        } else {
+          // Booking might have been cancelled
+          setState(() => _activeBooking = null);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Cuốc xe đã bị hủy hoặc không còn khả dụng.'), backgroundColor: DrivoColors.danger
+          ));
+        }
+      }
+    } else {
+      final res = await ApiService.getDriverPendingBookings();
+      if (res['success'] == true && mounted) {
+        final list = (res['data'] as List?) ?? [];
+        
+        if (_pendingOffer != null) {
+          // Check if current offer is still in the pending list
+          bool stillPending = list.any((b) => b['id'] == _pendingOffer!.id);
+          if (!stillPending) {
+            Navigator.pop(context); // Close the sheet
+            setState(() => _pendingOffer = null);
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Cuốc xe đã bị hủy hoặc được tài xế khác nhận.'), 
+              backgroundColor: DrivoColors.warning,
+            ));
+          }
+        } else if (list.isNotEmpty && _activeBooking == null) {
+          setState(() => _pendingOffer = DriverBooking.fromJson(list.first));
+          _showBookingOfferSheet();
+        }
+      }
+    }
+  }
+
+
+  void _showBookingOfferSheet() {
+    if (_pendingOffer == null) return;
+    final offer = _pendingOffer!;
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => Container(
+          decoration: const BoxDecoration(
+            color: DrivoColors.bgCard,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 40, height: 4, decoration: BoxDecoration(color: DrivoColors.border, borderRadius: BorderRadius.circular(2))),
+              const SizedBox(height: 16),
+
+              // Header
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: DrivoColors.primary.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.local_taxi_rounded, color: DrivoColors.primary, size: 26),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Cuốc xe mới!', style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
+                  Text(offer.bookingCode, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
+                ])),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(color: DrivoColors.success.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+                  child: Text(
+                    '${(offer.estimatedPrice / 1000).toStringAsFixed(0)}K ₫',
+                    style: GoogleFonts.inter(color: DrivoColors.success, fontWeight: FontWeight.w800, fontSize: 16),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 20),
+
+              // Route info
+              _OfferRouteRow(icon: Icons.circle, iconColor: DrivoColors.primary, label: 'Điểm đón', address: offer.pickupAddress),
+              const Padding(
+                padding: EdgeInsets.only(left: 10),
+                child: SizedBox(height: 2, width: 2, child: VerticalDivider(color: DrivoColors.border, thickness: 1)),
+              ),
+              _OfferRouteRow(icon: Icons.location_on, iconColor: DrivoColors.danger, label: 'Điểm đến', address: offer.destinationAddress),
+              const SizedBox(height: 16),
+
+              // Stats row
+              Row(children: [
+                _OfferStat(Icons.straighten_rounded, '${offer.estimatedDistanceKm.toStringAsFixed(1)} km'),
+                const SizedBox(width: 12),
+                _OfferStat(Icons.timer_outlined, '~${offer.estimatedDurationMin} phút'),
+                const SizedBox(width: 12),
+                _OfferStat(Icons.directions_car_rounded, '${offer.vehicleBrand} ${offer.vehicleModel}'),
+              ]),
+
+              if (offer.customerNote != null && offer.customerNote!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: DrivoColors.warning.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.notes_rounded, color: DrivoColors.warning, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(offer.customerNote!, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12))),
+                  ]),
+                ),
+              ],
+              const SizedBox(height: 20),
+
+              // Buttons
+              Row(children: [
+                Expanded(child: OutlinedButton(
+                  onPressed: _acceptingBooking ? null : () {
+                    Navigator.pop(ctx);
+                    setState(() => _pendingOffer = null);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: DrivoColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text('Bỏ qua', style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontWeight: FontWeight.w600)),
+                )),
+                const SizedBox(width: 12),
+                Expanded(flex: 2, child: ElevatedButton(
+                  onPressed: _acceptingBooking ? null : () async {
+                    setS(() => _acceptingBooking = true);
+                    final res = await ApiService.acceptBooking(offer.id);
+                    if (res['success'] == true && mounted) {
+                      Navigator.pop(ctx);
+                      await _loadActiveBooking();
+                      setState(() {
+                        _pendingOffer = null;
+                        _acceptingBooking = false;
+                      });
+                    } else {
+                      setS(() => _acceptingBooking = false);
+                      if (mounted) {
+                        Navigator.pop(ctx);
+                        setState(() => _pendingOffer = null);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(res['message'] ?? 'Cuốc xe không còn khả dụng'), backgroundColor: DrivoColors.danger),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: DrivoColors.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: _acceptingBooking
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('Nhận cuốc', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+                )),
+              ]),
+            ],
+          ),
+        ),
+      ),
+    ).whenComplete(() {
+      if (mounted) setState(() => _pendingOffer = null);
+    });
+  }
+
+  Future<void> _toggleOnline() async {
+    if (_togglingStatus) return;
+    final newStatus = !_isOnline;
+    setState(() => _togglingStatus = true);
+    final res = await ApiService.toggleDriverStatus(newStatus);
+    if (mounted) {
+      setState(() {
+        _togglingStatus = false;
+        if (res['success'] == true) {
+          _isOnline = newStatus;
+          if (_isOnline && _activeBooking == null) {
+            _startPolling();
+          } else {
+            _stopPolling();
+          }
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(res['message'] ?? (newStatus ? 'Đang trực tuyến' : 'Đã ngoại tuyến')),
+        backgroundColor: newStatus ? DrivoColors.success : DrivoColors.textMuted,
+        duration: const Duration(seconds: 2),
+      ));
+    }
+  }
+
+  Future<void> _updateStatus(String newStatus) async {
+    if (_activeBooking == null || _updatingStatus) return;
+    setState(() => _updatingStatus = true);
+    final res = await ApiService.updateBookingStatus(_activeBooking!.id, newStatus);
+    if (mounted) {
+      setState(() => _updatingStatus = false);
+      if (res['success'] == true) {
+        final updated = DriverBooking.fromJson(res['data']);
+        setState(() => _activeBooking = updated);
+        if (updated.status == 'Completed') {
+          setState(() => _activeBooking = null);
+          _startPolling();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('🎉 Hoàn thành chuyến! Đang tìm cuốc tiếp theo...'),
+            backgroundColor: DrivoColors.success,
+          ));
+          _loadProfile(); // refresh earnings
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res['message'] ?? 'Lỗi cập nhật trạng thái'),
+          backgroundColor: DrivoColors.danger,
+        ));
+      }
+    }
+  }
+
+  Future<void> _cancelBooking() async {
+    if (_activeBooking == null || _updatingStatus) return;
+    
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: DrivoColors.bgCard,
+        title: const Text('Xác nhận hủy', style: TextStyle(color: DrivoColors.danger)),
+        content: const Text('Bạn có chắc chắn muốn hủy cuốc xe này không? Việc này có thể ảnh hưởng đến tỷ lệ nhận chuyến của bạn.', style: TextStyle(color: DrivoColors.textPrimary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Không', style: TextStyle(color: DrivoColors.textMuted))),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.danger), child: const Text('Hủy cuốc')),
+        ],
+      )
+    );
+    
+    if (confirm != true) return;
+    
+    setState(() => _updatingStatus = true);
+    final res = await ApiService.cancelBookingByDriver(_activeBooking!.id, "Tài xế có việc bận đột xuất");
+    if (mounted) {
+      setState(() => _updatingStatus = false);
+      if (res['success'] == true) {
+        setState(() => _activeBooking = null);
+        _startPolling();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Đã hủy chuyến thành công'), backgroundColor: DrivoColors.success
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res['message'] ?? 'Lỗi hủy chuyến'), backgroundColor: DrivoColors.danger
+        ));
+      }
+    }
+  }
+
+  void _showChangePasswordDialog({bool forced = false}) {
+    final currentCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    String? error;
+    showDialog(
+      context: context,
+      barrierDismissible: !forced,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        backgroundColor: DrivoColors.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (forced) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(color: DrivoColors.warning.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+              child: Row(children: [
+                const Icon(Icons.warning_rounded, color: DrivoColors.warning, size: 14),
+                const SizedBox(width: 6),
+                Text('Bắt buộc đổi mật khẩu', style: GoogleFonts.inter(color: DrivoColors.warning, fontSize: 11, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+            const SizedBox(height: 10),
+          ],
+          Text('Đổi mật khẩu', style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 18, fontWeight: FontWeight.w700)),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (forced) Text(
+            'Mật khẩu hiện tại của bạn là số điện thoại. Vui lòng đổi mật khẩu mới để bảo vệ tài khoản.',
+            style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 13),
+          ),
+          if (forced) const SizedBox(height: 16),
+          if (error != null) ...[
+            Text(error!, style: const TextStyle(color: DrivoColors.danger, fontSize: 12)),
+            const SizedBox(height: 8),
+          ],
+          _pwField('Mật khẩu hiện tại', currentCtrl),
+          const SizedBox(height: 10),
+          _pwField('Mật khẩu mới (≥ 6 ký tự)', newCtrl),
+          const SizedBox(height: 10),
+          _pwField('Xác nhận mật khẩu mới', confirmCtrl),
+        ]),
+        actions: [
+          if (!forced) TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Hủy', style: TextStyle(color: DrivoColors.textMuted)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (newCtrl.text != confirmCtrl.text) {
+                setS(() => error = 'Mật khẩu xác nhận không khớp');
+                return;
+              }
+              final res = await ApiService.changePassword(currentCtrl.text, newCtrl.text);
+              if (res['success'] == true && mounted) {
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('✓ Đổi mật khẩu thành công!'), backgroundColor: DrivoColors.success,
+                ));
+                _loadProfile();
+              } else {
+                setS(() => error = res['message'] ?? 'Lỗi đổi mật khẩu');
+              }
+            },
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      )),
+    );
+  }
+
+  Widget _pwField(String label, TextEditingController ctrl) => TextField(
+    controller: ctrl,
+    obscureText: true,
+    style: const TextStyle(color: DrivoColors.textPrimary),
+    decoration: InputDecoration(labelText: label),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(
+        index: _tab,
+        children: [
+          _buildHomeTab(),
+          _EarningsTab(profile: _profile),
+          _ProfileTab(
+            profile: _profile,
+            user: widget.user,
+            onChangePassword: _showChangePasswordDialog,
+            onLogout: widget.onLogout,
+          ),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        backgroundColor: DrivoColors.bgCard,
+        indicatorColor: DrivoColors.primary.withOpacity(0.2),
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Trang chủ'),
+          NavigationDestination(icon: Icon(Icons.bar_chart_outlined), selectedIcon: Icon(Icons.bar_chart_rounded), label: 'Thu nhập'),
+          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person_rounded), label: 'Hồ sơ'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHomeTab() {
+    if (_loadingProfile) {
+      return const Center(child: CircularProgressIndicator(color: DrivoColors.primary));
+    }
+
+    // If driver has an active booking, show trip management screen
+    if (_activeBooking != null) {
+      return _buildActiveTripView();
+    }
+
+    // Otherwise show normal home
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header
+          Row(children: [
+            Container(
+              width: 48, height: 48,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Center(child: Text(
+                _profile?.fullName.split(' ').last[0] ?? '?',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+              )),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Xin chào!', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
+              Text(_profile?.fullName ?? '...', style: GoogleFonts.inter(
+                color: DrivoColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 16,
+              )),
+            ])),
+            DrivoBadge(_profile?.verificationStatus ?? 'Pending'),
+          ]),
+          const SizedBox(height: 24),
+
+          // Online Toggle Card
+          DrivoCard(
+            child: Row(children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 300),
+                width: 12, height: 12,
+                decoration: BoxDecoration(
+                  color: _isOnline ? DrivoColors.success : DrivoColors.textMuted,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  _isOnline ? 'Đang trực tuyến' : 'Ngoại tuyến',
+                  style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+                Text(
+                  _isOnline ? 'Đang tìm cuốc trong khu vực...' : 'Bật để bắt đầu nhận chuyến',
+                  style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12),
+                ),
+              ])),
+              if (_togglingStatus)
+                const SizedBox(width: 32, height: 32, child: CircularProgressIndicator(strokeWidth: 2, color: DrivoColors.primary))
+              else
+                Switch(
+                  value: _isOnline,
+                  onChanged: _profile?.verificationStatus == 'Approved' ? (_) => _toggleOnline() : null,
+                  activeColor: DrivoColors.accent,
+                  thumbColor: WidgetStateProperty.all(Colors.white),
+                ),
+            ]),
+          ),
+
+          // Verification warning
+          if (_profile?.verificationStatus != 'Approved') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: DrivoColors.warning.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.hourglass_empty_rounded, color: DrivoColors.warning, size: 18),
+                const SizedBox(width: 10),
+                Expanded(child: Text(
+                  'Hồ sơ đang chờ Admin duyệt. Sau khi được duyệt bạn có thể nhận chuyến.',
+                  style: GoogleFonts.inter(color: DrivoColors.warning, fontSize: 12),
+                )),
+              ]),
+            ),
+          ],
+
+          // Radar animation when online
+          if (_isOnline && _profile?.verificationStatus == 'Approved') ...[
+            const SizedBox(height: 24),
+            Center(
+              child: AnimatedBuilder(
+                animation: _radarCtrl,
+                builder: (context, child) {
+                  return Stack(alignment: Alignment.center, children: [
+                    for (int i = 0; i < 3; i++)
+                      Transform.scale(
+                        scale: (_radarAnim.value + i * 0.3).clamp(0.0, 1.6),
+                        child: Container(
+                          width: 120, height: 120,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: DrivoColors.primary.withOpacity((1.0 - _radarAnim.value * 0.6).clamp(0, 1) / (i + 1)),
+                              width: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    Container(
+                      width: 72, height: 72,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
+                        shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: DrivoColors.primary.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 6))],
+                      ),
+                      child: const Icon(Icons.local_taxi_rounded, color: Colors.white, size: 32),
+                    ),
+                  ]);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Center(child: Text(
+              'Đang tìm cuốc xe gần bạn...',
+              style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 13),
+            )),
+          ],
+
+          const SizedBox(height: 24),
+
+          // Stats
+          const SectionHeader('THỐNG KÊ'),
+          Row(children: [
+            Expanded(child: _StatCard('Chuyến đã chạy', '${_profile?.totalTrips ?? 0}', Icons.route_rounded, DrivoColors.primary)),
+            const SizedBox(width: 12),
+            Expanded(child: _StatCard('Đánh giá TB', '${(_profile?.ratingAverage ?? 0).toStringAsFixed(1)}⭐', Icons.star_rounded, DrivoColors.warning)),
+          ]),
+          const SizedBox(height: 12),
+          DrivoCard(
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Tổng thu nhập', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
+                Text(
+                  '${((_profile?.totalEarnings ?? 0) / 1000).toStringAsFixed(0)}K ₫',
+                  style: GoogleFonts.inter(color: DrivoColors.success, fontSize: 22, fontWeight: FontWeight.w800),
+                ),
+              ]),
+              const Icon(Icons.account_balance_wallet_rounded, color: DrivoColors.success, size: 32),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildActiveTripView() {
+    final b = _activeBooking!;
+    final statusColor = {
+      'DriverAccepted': DrivoColors.primary,
+      'DriverArriving': DrivoColors.warning,
+      'DriverArrived': DrivoColors.success,
+      'InProgress': DrivoColors.accent,
+    }[b.status] ?? DrivoColors.textMuted;
+
+    final statusIcon = {
+      'DriverAccepted': Icons.directions_car_rounded,
+      'DriverArriving': Icons.navigation_rounded,
+      'DriverArrived': Icons.location_on_rounded,
+      'InProgress': Icons.play_arrow_rounded,
+    }[b.status] ?? Icons.info_outline;
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Header
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+              child: Icon(statusIcon, color: statusColor, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Chuyến đang thực hiện', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
+              Text(b.statusDisplay, style: GoogleFonts.inter(color: statusColor, fontSize: 16, fontWeight: FontWeight.w700)),
+            ])),
+            Text(b.bookingCode, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+          ]),
+          const SizedBox(height: 20),
+
+          // Route Card
+          DrivoCard(
+            child: Column(children: [
+              _TripRouteRow(
+                icon: Icons.circle,
+                iconColor: DrivoColors.primary,
+                label: 'Đón khách',
+                address: b.pickupAddress,
+              ),
+              const Divider(color: DrivoColors.border),
+              _TripRouteRow(
+                icon: Icons.location_on,
+                iconColor: DrivoColors.danger,
+                label: 'Điểm đến',
+                address: b.destinationAddress,
+              ),
+            ]),
+          ),
+          const SizedBox(height: 16),
+
+          // Trip info
+          DrivoCard(
+            child: Column(children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                _TripInfoItem('Biển số', b.vehiclePlate),
+                _TripInfoItem('Loại xe', '${b.vehicleBrand} ${b.vehicleModel}'),
+                _TripInfoItem('Khoảng cách', '${b.estimatedDistanceKm.toStringAsFixed(1)} km'),
+              ]),
+              const SizedBox(height: 16),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                _TripInfoItem('Thời gian', '~${b.estimatedDurationMin} phút'),
+                _TripInfoItem('Hộp số', b.vehicleTransmission == 'Automatic' ? 'Tự động' : 'Số sàn'),
+                _TripInfoItem('Doanh thu', '${(b.estimatedPrice / 1000).toStringAsFixed(0)}K ₫',
+                    valueColor: DrivoColors.success),
+              ]),
+            ]),
+          ),
+
+          if (b.customerNote != null && b.customerNote!.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            DrivoCard(
+              child: Row(children: [
+                const Icon(Icons.notes_rounded, color: DrivoColors.warning, size: 18),
+                const SizedBox(width: 10),
+                Expanded(child: Text(b.customerNote!, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 13))),
+              ]),
+            ),
+          ],
+
+          // Progress Steps
+          const SizedBox(height: 20),
+          const SectionHeader('TIẾN TRÌNH CHUYẾN ĐI'),
+          _buildProgressSteps(b.status),
+          const SizedBox(height: 20),
+
+          // Action button
+          if (b.nextStatusAction.isNotEmpty)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _updatingStatus ? null : () => _updateStatus(b.nextStatusAction),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: statusColor,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: _updatingStatus
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : Text(b.nextStatusLabel, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
+              ),
+            ),
+          
+          if (b.status == 'DriverAccepted' || b.status == 'DriverArriving') ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _updatingStatus ? null : () => _cancelBooking(),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: DrivoColors.danger),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                child: Text('Hủy cuốc xe', style: GoogleFonts.inter(color: DrivoColors.danger, fontWeight: FontWeight.w600, fontSize: 15)),
+              ),
+            ),
+          ]
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildProgressSteps(String currentStatus) {
+    final steps = [
+      ('DriverAccepted', 'Đã nhận cuốc', Icons.check_circle),
+      ('DriverArriving', 'Đang đến điểm đón', Icons.navigation_rounded),
+      ('DriverArrived', 'Đã đến điểm đón', Icons.location_on_rounded),
+      ('InProgress', 'Đang chạy', Icons.play_circle_rounded),
+      ('Completed', 'Hoàn thành', Icons.flag_rounded),
+    ];
+
+    final statusOrder = ['DriverAccepted', 'DriverArriving', 'DriverArrived', 'InProgress', 'Completed'];
+    final currentIdx = statusOrder.indexOf(currentStatus);
+
+    return Column(
+      children: steps.asMap().entries.map((entry) {
+        final i = entry.key;
+        final step = entry.value;
+        final isDone = i < currentIdx;
+        final isCurrent = i == currentIdx;
+        final color = isDone ? DrivoColors.success : (isCurrent ? DrivoColors.primary : DrivoColors.textMuted);
+        return Row(children: [
+          Icon(isDone ? Icons.check_circle : step.$3, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(step.$2, style: GoogleFonts.inter(
+            color: isCurrent ? DrivoColors.textPrimary : color,
+            fontWeight: isCurrent ? FontWeight.w700 : FontWeight.normal,
+            fontSize: 13,
+          ))),
+          if (isCurrent)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: DrivoColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+              child: Text('Hiện tại', style: GoogleFonts.inter(color: DrivoColors.primary, fontSize: 10, fontWeight: FontWeight.w600)),
+            ),
+        ]);
+      }).expand((w) => [w, const SizedBox(height: 12)]).toList()..removeLast(),
+    );
+  }
+}
+
+// ── Sub-widgets ──────────────────────────────────────────────
+
+class _OfferRouteRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label, address;
+  const _OfferRouteRow({required this.icon, required this.iconColor, required this.label, required this.address});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(children: [
+      Icon(icon, color: iconColor, size: 16),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 10)),
+        Text(address, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontWeight: FontWeight.w500, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
+      ])),
+    ]),
+  );
+}
+
+class _OfferStat extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  const _OfferStat(this.icon, this.value);
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(color: DrivoColors.bgDark, borderRadius: BorderRadius.circular(10)),
+      child: Row(children: [
+        Icon(icon, color: DrivoColors.textMuted, size: 14),
+        const SizedBox(width: 4),
+        Expanded(child: Text(value, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis)),
+      ]),
+    ),
+  );
+}
+
+class _TripRouteRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label, address;
+  const _TripRouteRow({required this.icon, required this.iconColor, required this.label, required this.address});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Row(children: [
+      Icon(icon, color: iconColor, size: 20),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+        Text(address, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontWeight: FontWeight.w600, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
+      ])),
+    ]),
+  );
+}
+
+class _TripInfoItem extends StatelessWidget {
+  final String label, value;
+  final Color? valueColor;
+  const _TripInfoItem(this.label, this.value, {this.valueColor});
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+      Text(value, style: GoogleFonts.inter(color: valueColor ?? DrivoColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+    ]),
+  );
+}
+
+class _StatCard extends StatelessWidget {
+  final String label, value;
+  final IconData icon;
+  final Color color;
+  const _StatCard(this.label, this.value, this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) => DrivoCard(
+    padding: const EdgeInsets.all(16),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: color, size: 22),
+      const SizedBox(height: 8),
+      Text(value, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 22, fontWeight: FontWeight.w800)),
+      Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+    ]),
+  );
+}
+
+// ── Earnings Tab ─────────────────────────────────────────────
+class _EarningsTab extends StatefulWidget {
+  final DriverProfile? profile;
+  const _EarningsTab({required this.profile});
+
+  @override
+  State<_EarningsTab> createState() => _EarningsTabState();
+}
+
+class _EarningsTabState extends State<_EarningsTab> {
+  List<DriverBooking> _history = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final res = await ApiService.getDriverHistory();
+    if (mounted) {
+      setState(() {
+        _history = res['success'] == true && res['data'] != null
+            ? (res['data'] as List).map((x) => DriverBooking.fromJson(x)).where((b) => b.status == 'Completed').toList()
+            : [];
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.profile?.totalEarnings ?? 0;
+    final trips = widget.profile?.totalTrips ?? 0;
+    return SafeArea(
+      child: _loading
+          ? const Center(child: CircularProgressIndicator(color: DrivoColors.primary))
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(20),
+                child: Column(children: [
+                  // Summary card
+                  DrivoCard(
+                    child: Column(children: [
+                      Text('Tổng thu nhập', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 13)),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${(total / 1000).toStringAsFixed(0)}.000 ₫',
+                        style: GoogleFonts.inter(color: DrivoColors.success, fontSize: 32, fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 4),
+                      Text('$trips chuyến hoàn thành', style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 13)),
+                    ]),
+                  ),
+                  const SizedBox(height: 20),
+                  const SectionHeader('LỊCH SỬ CHUYẾN ĐI'),
+                  if (_history.isEmpty)
+                    DrivoCard(child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(children: [
+                        const Icon(Icons.history_rounded, color: DrivoColors.textMuted, size: 40),
+                        const SizedBox(height: 12),
+                        Text('Chưa có chuyến hoàn thành', style: GoogleFonts.inter(color: DrivoColors.textSecondary)),
+                      ]),
+                    ))
+                  else
+                    ..._history.map((b) => _HistoryTile(booking: b)),
+                ]),
+              ),
+            ),
+    );
+  }
+}
+
+class _HistoryTile extends StatelessWidget {
+  final DriverBooking booking;
+  const _HistoryTile({required this.booking});
+
+  @override
+  Widget build(BuildContext context) {
+    final price = booking.finalPrice ?? booking.estimatedPrice;
+    final dateStr = '${booking.createdAt.day.toString().padLeft(2,'0')}/'
+        '${booking.createdAt.month.toString().padLeft(2,'0')}/'
+        '${booking.createdAt.year}  '
+        '${booking.createdAt.hour.toString().padLeft(2,'0')}:'
+        '${booking.createdAt.minute.toString().padLeft(2,'0')}';
+
+    return DrivoCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 38, height: 38,
+            decoration: BoxDecoration(color: DrivoColors.success.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+            child: const Icon(Icons.check_circle_rounded, color: DrivoColors.success, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('#${booking.bookingCode}', style: GoogleFonts.inter(color: const Color(0xFF6C63FF), fontWeight: FontWeight.w700, fontSize: 13)),
+            Text(dateStr, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+          ])),
+          Text(
+            '+${(price / 1000).toStringAsFixed(0)}K ₫',
+            style: GoogleFonts.inter(color: DrivoColors.success, fontWeight: FontWeight.w800, fontSize: 15),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        Row(children: [
+          const Icon(Icons.trip_origin_rounded, size: 12, color: Color(0xFF6C63FF)),
+          const SizedBox(width: 6),
+          Expanded(child: Text(booking.pickupAddress, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
+        ]),
+        const SizedBox(height: 4),
+        Row(children: [
+          const Icon(Icons.location_on_rounded, size: 12, color: Color(0xFFEF4444)),
+          const SizedBox(width: 6),
+          Expanded(child: Text(booking.destinationAddress, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ── Profile Tab ──────────────────────────────────────────────
+class _ProfileTab extends StatefulWidget {
+  final DriverProfile? profile;
+  final AuthUser user;
+  final VoidCallback onChangePassword;
+  final VoidCallback onLogout;
+  const _ProfileTab({required this.profile, required this.user, required this.onChangePassword, required this.onLogout});
+
+  @override
+  State<_ProfileTab> createState() => _ProfileTabState();
+}
+
+class _ProfileTabState extends State<_ProfileTab> {
+  bool _editing = false;
+  final _nameCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void didUpdateWidget(covariant _ProfileTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.profile != null && !_editing) {
+      _nameCtrl.text = widget.profile!.fullName;
+      _emailCtrl.text = widget.profile!.email ?? '';
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final res = await ApiService.updateDriverProfile({'fullName': _nameCtrl.text, 'email': _emailCtrl.text});
+    setState(() { _saving = false; _editing = false; });
+    if (res['success'] == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('✓ Cập nhật thành công!'), backgroundColor: DrivoColors.success,
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.profile;
+    if (p == null) return const Center(child: CircularProgressIndicator(color: DrivoColors.primary));
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(children: [
+          Container(
+            width: 80, height: 80,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: DrivoColors.primary.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 6))],
+            ),
+            child: Center(child: Text(p.fullName.split(' ').last[0],
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 32))),
+          ),
+          const SizedBox(height: 12),
+          Text(p.fullName, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            DrivoBadge(p.verificationStatus), const SizedBox(width: 8), DrivoBadge(p.driverStatus),
+          ]),
+          if (p.isFirstLogin) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: DrivoColors.warning.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.lock_outline, color: DrivoColors.warning, size: 14),
+                const SizedBox(width: 8),
+                Text('Vui lòng đổi mật khẩu mặc định', style: GoogleFonts.inter(color: DrivoColors.warning, fontSize: 12)),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 24),
+          const SectionHeader('THÔNG TIN CÁ NHÂN'),
+          DrivoCard(child: Column(children: [
+            if (_editing) ...[
+              TextField(controller: _nameCtrl, style: const TextStyle(color: DrivoColors.textPrimary), decoration: const InputDecoration(labelText: 'Họ và tên')),
+              const SizedBox(height: 12),
+              TextField(controller: _emailCtrl, style: const TextStyle(color: DrivoColors.textPrimary), decoration: const InputDecoration(labelText: 'Email')),
+            ] else ...[
+              _InfoRow(Icons.phone_outlined, 'Số điện thoại', p.phone),
+              _InfoRow(Icons.email_outlined, 'Email', p.email ?? '—'),
+              _InfoRow(Icons.badge_outlined, 'Số GPLX', p.licenseNumber),
+              _InfoRow(Icons.drive_eta_outlined, 'Hạng bằng lái', p.licenseClass ?? '—'),
+              _InfoRow(Icons.star_outline, 'Đánh giá', '${p.ratingAverage.toStringAsFixed(1)} ⭐ (${p.totalTrips} chuyến)'),
+            ],
+            const SizedBox(height: 16),
+            Row(children: [
+              if (_editing) ...[
+                Expanded(child: OutlinedButton(
+                  onPressed: () => setState(() => _editing = false),
+                  style: OutlinedButton.styleFrom(foregroundColor: DrivoColors.textSecondary, side: const BorderSide(color: DrivoColors.border)),
+                  child: const Text('Hủy'),
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: ElevatedButton(
+                  onPressed: _saving ? null : _save,
+                  child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Lưu'),
+                )),
+              ] else
+                Expanded(child: ElevatedButton.icon(
+                  onPressed: () { _nameCtrl.text = p.fullName; _emailCtrl.text = p.email ?? ''; setState(() => _editing = true); },
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Chỉnh sửa thông tin'),
+                  style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.primary.withOpacity(0.15)),
+                )),
+            ]),
+          ])),
+          const SizedBox(height: 16),
+          const SectionHeader('TÀI KHOẢN'),
+          DrivoCard(child: Column(children: [
+            _ActionRow(Icons.lock_outline, 'Đổi mật khẩu', DrivoColors.primary, widget.onChangePassword),
+            const Divider(color: DrivoColors.border, height: 1),
+            _ActionRow(Icons.help_outline, 'Hỗ trợ', DrivoColors.textSecondary, () {}),
+            const Divider(color: DrivoColors.border, height: 1),
+            _ActionRow(Icons.logout_rounded, 'Đăng xuất', DrivoColors.danger, widget.onLogout),
+          ])),
+          const SizedBox(height: 24),
+        ]),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
+  const _InfoRow(this.icon, this.label, this.value);
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(children: [
+      Icon(icon, color: DrivoColors.textMuted, size: 18),
+      const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+        Text(value, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontWeight: FontWeight.w500)),
+      ])),
+    ]),
+  );
+}
+
+class _ActionRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _ActionRow(this.icon, this.label, this.color, this.onTap);
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 14),
+        Expanded(child: Text(label, style: GoogleFonts.inter(color: color, fontWeight: FontWeight.w500))),
+        const Icon(Icons.chevron_right, color: DrivoColors.textMuted, size: 18),
+      ]),
+    ),
+  );
+}

@@ -29,9 +29,22 @@ public class DriverProfileResponse
     public string? LicenseClass { get; set; }
     public string VerificationStatus { get; set; } = null!;
     public string DriverStatus { get; set; } = null!;
+    public string AccountStatus { get; set; } = null!;
     public decimal RatingAverage { get; set; }
     public int TotalTrips { get; set; }
     public decimal TotalEarnings { get; set; }
     public DateTime CreatedAt { get; set; }
     public bool IsFirstLogin { get; set; }
+}
+
+// ── Driver toggle online/offline ─────────────────────────────
+public class ToggleDriverStatusRequest
+{
+    public bool IsOnline { get; set; }
+}
+
+// ── Update booking status ─────────────────────────────────────
+public class UpdateBookingStatusRequest
+{
+    public string Status { get; set; } = null!;
 }

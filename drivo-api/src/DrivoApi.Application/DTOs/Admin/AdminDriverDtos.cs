@@ -41,6 +41,7 @@ public class DriverDetailResponse
     public string? LicenseClass { get; set; }
     public string VerificationStatus { get; set; } = null!;
     public string DriverStatus { get; set; } = null!;
+    public string AccountStatus { get; set; } = null!;
     public decimal RatingAverage { get; set; }
     public int TotalTrips { get; set; }
     public DateTime CreatedAt { get; set; }
@@ -68,5 +69,6 @@ public class DriverListResponse
     public string LicenseNumber { get; set; } = null!;
     public string VerificationStatus { get; set; } = null!;
     public string DriverStatus { get; set; } = null!;
+    public string AccountStatus { get; set; } = null!;
     public DateTime CreatedAt { get; set; }
 }

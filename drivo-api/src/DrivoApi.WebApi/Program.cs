@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 ﻿using DrivoApi.Application.Services;
 using DrivoApi.Application.Settings;
 using DrivoApi.Infrastructure;
@@ -9,14 +10,14 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 笏笏 Database 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+//
 builder.Services.AddDbContext<DrivoDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// 笏笏 JWT Settings (strongly-typed) 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+// JWT Settings
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("JwtSettings"));
 
-// 笏笏 JWT Auth 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+//  JWT Auth
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
 var secretKey = jwtSettings["SecretKey"]!;
 
@@ -51,33 +52,36 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// 笏笏 SignalR 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+// SignalR
 builder.Services.AddSignalR();
 
-// 笏笏 CORS 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
-var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+// CORS (Permissive for development & testing Web App)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("DrivoCors", policy =>
-        policy.WithOrigins(allowedOrigins)
+        policy.SetIsOriginAllowed(origin => true) // Cho phép tất cả các domain
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials());
 });
 
-// 笏笏 Controllers + Swagger 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
-builder.Services.AddControllers();
+// Controllers + Swagger
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// 笏笏 Application Services 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+// Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IAdminDriverService, AdminDriverService>();
 builder.Services.AddScoped<IDriverProfileService, DriverProfileService>();
 builder.Services.AddScoped<ICustomerVehicleService, CustomerVehicleService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
-// TODO Ngﾆｰ盻拱 B: builder.Services.AddScoped<IBookingService, BookingService>();
-// TODO Ngﾆｰ盻拱 B: builder.Services.AddScoped<IPaymentService, PaymentService>();
+// TODO Nguyen Nhat: builder.Services.AddScoped<IBookingService, BookingService>();
+// TODO Nguyen Nhat: builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 var app = builder.Build();
 
@@ -92,7 +96,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-// 笏笏 SignalR Hubs 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+// SignalR Hubs
 // app.MapHub<TrackingHub>("/hubs/tracking");
 
 app.Run();

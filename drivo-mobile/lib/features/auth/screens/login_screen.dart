@@ -1,8 +1,10 @@
-﻿import 'package:flutter/material.dart';
+﻿
+import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../core/api_service.dart';
-import '../../core/theme.dart';
+import '../../../core/api_service.dart';
+import '../../../core/theme.dart';
 
 class LoginScreen extends StatefulWidget {
   final Function(AuthUser) onLogin;
@@ -47,8 +49,11 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
         await ApiService.saveTokens(data['accessToken'], data['refreshToken']);
         final user = AuthUser.fromJson(data['user']);
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_json', data['user'].toString());
-        widget.onLogin(user);
+        await prefs.setString('user_json', jsonEncode(data['user']));
+        if (mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          widget.onLogin(user);
+        }
       } else {
         setState(() { _error = res['message'] ?? 'Đăng nhập thất bại'; });
       }
@@ -85,6 +90,22 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                 child: IntrinsicHeight(
                   child: Column(
                     children: [
+                      const SizedBox(height: 16),
+                      Align(
+                        alignment: Alignment.topLeft,
+                        child: GestureDetector(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            width: 44, height: 44,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                            ),
+                            child: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 22),
+                          ),
+                        ),
+                      ),
                       const Spacer(),
                       // Logo
                       Container(

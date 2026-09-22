@@ -104,9 +104,19 @@ public class AuthService(DrivoDbContext db, IOptions<JwtSettings> jwtOptions) : 
     // ── Login ──────────────────────────────────────────────────
     public async Task<BaseResponse<AuthResponse>> LoginAsync(LoginRequest req)
     {
-        var user = await db.Users
-            .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
-            .FirstOrDefaultAsync(u => u.Phone == req.Phone && !u.IsDeleted);
+        User? user = null;
+        if (!string.IsNullOrEmpty(req.Email))
+        {
+            user = await db.Users
+                .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Email == req.Email && !u.IsDeleted);
+        }
+        else if (!string.IsNullOrEmpty(req.Phone))
+        {
+            user = await db.Users
+                .Include(u => u.UserRoles).ThenInclude(ur => ur.Role)
+                .FirstOrDefaultAsync(u => u.Phone == req.Phone && !u.IsDeleted);
+        }
 
         if (user == null)
             return BaseResponse<AuthResponse>.Fail("Số điện thoại hoặc mật khẩu không đúng.");
@@ -268,5 +278,51 @@ public class AuthService(DrivoDbContext db, IOptions<JwtSettings> jwtOptions) : 
         var expectedHash = Convert.FromBase64String(parts[2]);
         var actualHash = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, 32);
         return CryptographicOperations.FixedTimeEquals(actualHash, expectedHash);
+    }
+
+    // ── Update Profile ─────────────────────────────────────────
+    public async Task<BaseResponse<UserInfo>> UpdateProfileAsync(int userId, UpdateProfileRequest req)
+    {
+        var user = await db.Users.Include(u => u.UserRoles).ThenInclude(ur => ur.Role).FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null)
+            return BaseResponse<UserInfo>.Fail("Không tìm thấy người dùng.");
+
+        user.FullName = req.FullName;
+        user.Email = req.Email;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await db.SaveChangesAsync();
+
+        var roles = user.UserRoles.Select(ur => ur.Role.Name).ToList();
+
+        var userInfo = new UserInfo
+        {
+            Id = user.Id,
+            FullName = user.FullName,
+            Phone = user.Phone,
+            Email = user.Email,
+            AvatarUrl = user.AvatarUrl,
+            Roles = roles
+        };
+
+        return BaseResponse<UserInfo>.Ok(userInfo, "Cập nhật hồ sơ thành công.");
+    }
+
+    // ── Change Password ────────────────────────────────────────
+    public async Task<BaseResponse<bool>> ChangePasswordAsync(int userId, ChangePasswordRequest req)
+    {
+        var user = await db.Users.FindAsync(userId);
+        if (user == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy người dùng.");
+
+        if (!VerifyPassword(req.CurrentPassword, user.PasswordHash))
+            return BaseResponse<bool>.Fail("Mật khẩu hiện tại không chính xác.");
+
+        user.PasswordHash = HashPassword(req.NewPassword);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await db.SaveChangesAsync();
+
+        return BaseResponse<bool>.Ok(true, "Đổi mật khẩu thành công.");
     }
 }

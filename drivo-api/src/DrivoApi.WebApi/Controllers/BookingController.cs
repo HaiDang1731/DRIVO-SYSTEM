@@ -66,4 +66,11 @@ public class BookingController(IBookingService bookingService) : ControllerBase
         var result = await bookingService.GetCustomerBookingsAsync(CurrentUserId, page, pageSize);
         return Ok(result);
     }
+
+    [HttpPost("{id:long}/rate")]
+    public async Task<IActionResult> RateBooking(long id, [FromBody] DrivoApi.Application.DTOs.Booking.RateBookingRequest req)
+    {
+        var result = await bookingService.RateBookingAsync(id, CurrentUserId, req.Score, req.Comment ?? string.Empty);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
 }
