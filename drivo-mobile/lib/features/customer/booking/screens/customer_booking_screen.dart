@@ -13,11 +13,14 @@ import '../../../../core/tracking_service.dart';
 class CustomerBookingScreen extends StatefulWidget {
   final AuthUser user;
   final BookingDetail? initialActiveBooking;
+  /// Mã khách chọn từ Home; tự áp khi đã có giá ước tính.
+  final String? initialVoucherCode;
 
   const CustomerBookingScreen({
     super.key,
     required this.user,
     this.initialActiveBooking,
+    this.initialVoucherCode,
   });
 
   @override
@@ -46,6 +49,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   // Voucher đã áp: mã + số tiền giảm tính theo giá ước tính hiện tại
   String? _voucherCode;
   double _voucherDiscount = 0;
+  late String? _pendingVoucherCode = widget.initialVoucherCode;
 
   static const Map<String, String> _paymentMethodApi = {
     'Tiền mặt': 'Cash',
@@ -268,7 +272,11 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
         });
         _fitRoute();
         // Giá đổi (đổi điểm đến/xe) -> tính lại số tiền giảm của voucher đang áp
-        if (_voucherCode != null) _applyVoucher(_voucherCode!, silent: true);
+        if (_voucherCode != null) {
+          _applyVoucher(_voucherCode!, silent: true);
+        } else if (_pendingVoucherCode != null) {
+          _applyPendingVoucher();
+        }
       } else {
         setState(() {
           _estimate = null;
@@ -2479,6 +2487,20 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
         ),
       ),
     );
+  }
+
+  Future<void> _applyPendingVoucher() async {
+    final code = _pendingVoucherCode;
+    if (code == null) return;
+    _pendingVoucherCode = null;
+    final err = await _applyVoucher(code);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(err == null
+          ? 'Đã áp mã $_voucherCode, giảm ${_formatCurrency(_voucherDiscount)}'
+          : 'Chưa áp được mã $code: $err'),
+      backgroundColor: err == null ? const Color(0xFF16A34A) : const Color(0xFFF59E0B),
+    ));
   }
 
   void _clearVoucher() => setState(() {

@@ -339,6 +339,43 @@ DateTime? _utcToLocal(dynamic v) {
   return DateTime.tryParse(s)?.toLocal();
 }
 
+class VoucherInfo {
+  final String code;
+  final String title;
+  final String? description;
+  final String discountType;
+  final double discountValue;
+  final double? maxDiscountAmount;
+  final double minOrderAmount;
+  final DateTime? endDate;
+
+  VoucherInfo.fromJson(Map<String, dynamic> j)
+      : code = j['code'] ?? '',
+        title = j['title'] ?? '',
+        description = j['description'],
+        discountType = j['discountType'] ?? 'FIXED',
+        discountValue = _toD(j['discountValue']) ?? 0,
+        maxDiscountAmount = _toD(j['maxDiscountAmount']),
+        minOrderAmount = _toD(j['minOrderAmount']) ?? 0,
+        endDate = _utcToLocal(j['endDate']);
+
+  static String _money(double v) =>
+      '${v.toStringAsFixed(0).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.')}đ';
+
+  /// VD: "Giảm 20%, tối đa 50.000đ · đơn từ 50.000đ · HSD 22/11"
+  String get summary {
+    final parts = <String>[
+      discountType == 'PERCENT'
+          ? 'Giảm ${discountValue.toStringAsFixed(0)}%'
+              '${maxDiscountAmount != null && maxDiscountAmount! > 0 ? ', tối đa ${_money(maxDiscountAmount!)}' : ''}'
+          : 'Giảm ${_money(discountValue)}',
+      if (minOrderAmount > 0) 'đơn từ ${_money(minOrderAmount)}',
+      if (endDate != null) 'HSD ${endDate!.day.toString().padLeft(2, '0')}/${endDate!.month.toString().padLeft(2, '0')}',
+    ];
+    return parts.join(' · ');
+  }
+}
+
 class EarningsTrip {
   final int id;
   final String bookingCode;
