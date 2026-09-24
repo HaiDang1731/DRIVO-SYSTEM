@@ -1,5 +1,6 @@
 using DrivoApi.Application.DTOs.Booking;
 using DrivoApi.Application.DTOs.Common;
+using DrivoApi.Application.DTOs.Tracking;
 
 namespace DrivoApi.Application.Services;
 
@@ -14,11 +15,16 @@ public interface IBookingService
     Task<BaseResponse<List<BookingDetailResponse>>> GetCustomerBookingsAsync(int userId, int page, int pageSize);
 
     // Driver methods
-    Task<BaseResponse<bool>> ToggleDriverStatusAsync(int userId, bool isOnline);
-    Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int driverId);
+    Task<BaseResponse<bool>> ToggleDriverStatusAsync(int userId, bool isOnline, decimal? latitude = null, decimal? longitude = null);
+    Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int userId);
     Task<BaseResponse<BookingDetailResponse>> AcceptBookingAsync(long bookingId, int userId);
     Task<BaseResponse<BookingDetailResponse>> UpdateBookingStatusAsync(long bookingId, int userId, string newStatus);
     Task<BaseResponse<BookingDetailResponse?>> GetDriverActiveBookingAsync(int userId);
     Task<BaseResponse<List<BookingDetailResponse>>> GetDriverBookingHistoryAsync(int userId, int page, int pageSize);
+    Task<BaseResponse<object>> UpdateDriverLocationAsync(int userId, UpdateDriverLocationRequest request);
     Task<BaseResponse<bool>> RateBookingAsync(long bookingId, int customerId, byte score, string comment);
+
+    // Admin
+    Task<BaseResponse<AdminBookingDetailResponse>> GetAdminBookingDetailAsync(long bookingId);
+    Task<BaseResponse<bool>> CancelBookingByAdminAsync(long bookingId, int adminUserId, string? reason);
 }

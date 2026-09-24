@@ -26,6 +26,7 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
     public DbSet<PricingRule> PricingRules => Set<PricingRule>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Voucher> Vouchers => Set<Voucher>();
 
     public static string ToSnakeUpper(string val) =>
         string.Concat(val.Select((x, i) => i > 0 && char.IsUpper(x) ? "_" + x : x.ToString())).ToUpperInvariant();
@@ -127,6 +128,48 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
         modelBuilder.Entity<BookingDriverOffer>()
             .Property(o => o.OfferStatus)
             .HasConversion<string>();
+
+        // Decimal precision (match SQL schema; default decimal(18,2) would truncate coordinates)
+        modelBuilder.Entity<Driver>(e =>
+        {
+            e.Property(d => d.CurrentLatitude).HasPrecision(10, 7);
+            e.Property(d => d.CurrentLongitude).HasPrecision(10, 7);
+        });
+
+        modelBuilder.Entity<DriverLocationHistory>(e =>
+        {
+            e.Property(h => h.Latitude).HasPrecision(10, 7);
+            e.Property(h => h.Longitude).HasPrecision(10, 7);
+            e.Property(h => h.AccuracyMeters).HasPrecision(8, 2);
+            e.Property(h => h.SpeedKmh).HasPrecision(8, 2);
+            e.Property(h => h.Heading).HasPrecision(6, 2);
+        });
+
+        modelBuilder.Entity<Booking>(e =>
+        {
+            e.Property(b => b.PickupLatitude).HasPrecision(10, 7);
+            e.Property(b => b.PickupLongitude).HasPrecision(10, 7);
+            e.Property(b => b.DestinationLatitude).HasPrecision(10, 7);
+            e.Property(b => b.DestinationLongitude).HasPrecision(10, 7);
+            e.Property(b => b.EstimatedDistanceKm).HasPrecision(10, 2);
+            e.Property(b => b.PickupDistanceKm).HasPrecision(8, 2);
+            e.Property(b => b.ActualDistanceKm).HasPrecision(8, 2);
+        });
+
+        modelBuilder.Entity<Trip>(e =>
+        {
+            e.Property(t => t.StartLatitude).HasPrecision(10, 7);
+            e.Property(t => t.StartLongitude).HasPrecision(10, 7);
+            e.Property(t => t.EndLatitude).HasPrecision(10, 7);
+            e.Property(t => t.EndLongitude).HasPrecision(10, 7);
+            e.Property(t => t.ActualDistanceKm).HasPrecision(10, 2);
+        });
+
+        modelBuilder.Entity<PricingRule>(e =>
+        {
+            e.Property(p => p.FreePickupKm).HasPrecision(6, 2);
+            e.Property(p => p.OverDistanceTolerancePercent).HasPrecision(5, 2);
+        });
 
         // Table name mappings (matching exact database tables)
         modelBuilder.Entity<BookingStatusHistory>().ToTable("BookingStatusHistory");

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'core/api_service.dart';
+import 'core/tracking_service.dart';
 import 'core/theme.dart';
 import 'features/auth/screens/onboarding_screen.dart';
 import 'features/driver/home/screens/driver_home_screen.dart';
@@ -49,7 +50,7 @@ class _RootRouterState extends State<_RootRouter> {
       try {
         final res = await ApiService.getMe();
         if (res['success'] == true) {
-          final loginRes = await ApiService.login('', '');
+          await ApiService.login('', '');
           // Dùng /auth/me để lấy role, parse từ token claims
           if (mounted) {
             setState(() {
@@ -101,6 +102,7 @@ class _RootRouterState extends State<_RootRouter> {
   }
 
   Future<void> _handleLogout() async {
+    await TrackingService.instance.disconnect();
     await ApiService.logout();
     await ApiService.clearTokens();
     setState(() => _user = null);

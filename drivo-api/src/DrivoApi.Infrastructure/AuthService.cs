@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -271,7 +271,7 @@ public class AuthService(DrivoDbContext db, IOptions<JwtSettings> jwtOptions) : 
 
     private static bool VerifyPassword(string password, string stored)
     {
-        var parts = stored.Split('.');
+        var parts = stored.Split('.', ':');
         if (parts.Length != 3) return false;
         if (!int.TryParse(parts[0], out var iterations)) return false;
         var salt = Convert.FromBase64String(parts[1]);

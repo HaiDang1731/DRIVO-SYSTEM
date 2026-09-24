@@ -1,5 +1,9 @@
-﻿using DrivoApi.Application.DTOs.Booking;
+using System.Linq.Expressions;
+using DrivoApi.Application.Common;
+using DrivoApi.Application.DTOs.Booking;
 using DrivoApi.Application.DTOs.Common;
+using DrivoApi.Application.DTOs.Maps;
+using DrivoApi.Application.DTOs.Tracking;
 using DrivoApi.Application.Services;
 using DrivoApi.Domain.Entities;
 using DrivoApi.Domain.Enums;
@@ -8,63 +12,111 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DrivoApi.Infrastructure;
 
-public class BookingService(DrivoDbContext db) : IBookingService
+public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotifier notifier) : IBookingService
 {
-    private static double ToRadians(double degrees) => degrees * Math.PI / 180.0;
+    /// <summary>Bán kính (km, đường chim bay) để tài xế thấy cuốc chờ.</summary>
+    private const double PendingSearchRadiusKm = 10.0;
 
-    private static decimal CalculateDistanceKm(decimal lat1, decimal lon1, decimal lat2, decimal lon2)
+    /// <summary>Vị trí tài xế được coi là "mới" trong khoảng thời gian này (xem trước chặng đón).</summary>
+    private static readonly TimeSpan FreshLocationWindow = TimeSpan.FromMinutes(10);
+
+    /// <summary>Bỏ qua cập nhật vị trí nếu lần trước cách chưa tới 2 giây.</summary>
+    private static readonly TimeSpan LocationThrottle = TimeSpan.FromSeconds(2);
+
+    /// <summary>Khi không có cuốc, chỉ lưu lịch sử vị trí tối đa 1 lần / 60 giây.</summary>
+    private static readonly TimeSpan IdleHistoryInterval = TimeSpan.FromSeconds(60);
+
+    private const double MaxGpsAccuracyMeters = 50.0;
+    private const double MaxPlausibleSpeedKmh = 150.0;
+
+    /// <summary>Các trạng thái tài xế đang phục vụ cuốc (DriverAccepted..InProgress).</summary>
+    private static readonly Expression<Func<Booking, bool>> IsDriverActiveStatus = b =>
+        b.Status == BookingStatus.DriverAccepted ||
+        b.Status == BookingStatus.DriverArriving ||
+        b.Status == BookingStatus.DriverArrived ||
+        b.Status == BookingStatus.InProgress;
+
+    // ══════════════════════════════════════════════════════════
+    //  PRICING HELPERS
+    // ══════════════════════════════════════════════════════════
+
+    private static PricingRule DefaultPricingRule() => new()
     {
-        if (lat1 == 0 && lon1 == 0 && lat2 == 0 && lon2 == 0) return 5.0m;
-        const double r = 6371.0;
-        var dLat = ToRadians((double)(lat2 - lat1));
-        var dLon = ToRadians((double)(lon2 - lon1));
-        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
-                Math.Cos(ToRadians((double)lat1)) * Math.Cos(ToRadians((double)lat2)) *
-                Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
-        var dist = (decimal)(r * c);
-        return Math.Max(1.0m, Math.Round(dist, 1));
-    }
+        Id = 0,
+        VehicleType = VehicleType.Car,
+        BaseFare = 150000m,
+        PricePerKm = 16000m,
+        PricePerMinute = 1000m,
+        NightSurcharge = 30000m,
+        WaitingPricePerMin = 1000m,
+        FreePickupKm = 3m,
+        PickupFeePerKm = 5000m,
+        FreeWaitingMin = 10,
+        OverDistanceTolerancePercent = 10m
+    };
 
     private async Task<PricingRule> GetApplicablePricingRuleAsync(VehicleType vehicleType)
     {
-        var rule = await db.PricingRules
-            .Where(p => p.VehicleType == vehicleType && p.IsActive)
+        var now = DateTime.UtcNow;
+        var effective = db.PricingRules.AsNoTracking()
+            .Where(p => p.IsActive && p.EffectiveFrom <= now && (p.EffectiveTo == null || p.EffectiveTo > now));
+
+        var rule = await effective
+            .Where(p => p.VehicleType == vehicleType)
             .OrderByDescending(p => p.EffectiveFrom)
             .FirstOrDefaultAsync();
 
-        if (rule == null)
-        {
-            rule = await db.PricingRules.Where(p => p.IsActive).FirstOrDefaultAsync();
-        }
+        rule ??= await effective
+            .OrderByDescending(p => p.EffectiveFrom)
+            .FirstOrDefaultAsync();
 
-        return rule ?? new PricingRule
-        {
-            Id = 0,
-            VehicleType = VehicleType.Car,
-            BaseFare = 150000m,
-            PricePerKm = 16000m,
-            PricePerMinute = 1000m,
-            NightSurcharge = 30000m
-        };
+        return rule ?? DefaultPricingRule();
     }
 
-    public async Task<BaseResponse<EstimateFareResponse>> EstimateFareAsync(EstimateFareRequest req)
+    /// <summary>Bảng giá đã chốt lúc đặt cuốc (snapshot), nếu không có thì bảng giá hiện hành.</summary>
+    private async Task<PricingRule> GetPricingRuleForBookingAsync(Booking booking)
     {
-        var distKm = CalculateDistanceKm(req.PickupLatitude, req.PickupLongitude, req.DestinationLatitude, req.DestinationLongitude);
-        var estMinutes = (int)Math.Max(10, Math.Round(distKm * 2.5m));
+        if (booking.PricingRuleId.HasValue)
+        {
+            var rule = await db.PricingRules.AsNoTracking().FirstOrDefaultAsync(p => p.Id == booking.PricingRuleId.Value);
+            if (rule != null) return rule;
+        }
+        return await GetApplicablePricingRuleAsync(booking.VehicleType);
+    }
+
+    private static decimal CalcPickupFee(decimal pickupKm, PricingRule rule) =>
+        GeoUtils.Round1000(Math.Max(0m, pickupKm - rule.FreePickupKm) * rule.PickupFeePerKm);
+
+    private async Task<(EstimateFareResponse Fare, RouteResult Route)> ComputeEstimateAsync(EstimateFareRequest req)
+    {
+        RouteResult route;
+        var pickupValid = GeoUtils.IsValid(req.PickupLatitude, req.PickupLongitude);
+        if (pickupValid && GeoUtils.IsValid(req.DestinationLatitude, req.DestinationLongitude))
+        {
+            route = await maps.GetRouteAsync(
+                (double)req.PickupLatitude, (double)req.PickupLongitude,
+                (double)req.DestinationLatitude, (double)req.DestinationLongitude, "DRIVE");
+        }
+        else
+        {
+            // Thiếu tọa độ (client cũ) → giữ hành vi cũ: mặc định 5 km
+            route = new RouteResult { DistanceKm = 5.0m, DurationMin = 13, Polyline = null };
+        }
+
+        var distKm = route.DistanceKm;
+        var estMinutes = route.DurationMin;
 
         var pricing = await GetApplicablePricingRuleAsync(req.VehicleType);
 
         var baseFare = pricing.BaseFare;
-        var distanceFare = distKm > 2m ? (distKm - 2m) * pricing.PricePerKm : 0m;
+        var distanceFare = Math.Max(0m, distKm - 2m) * pricing.PricePerKm;
         var timeFare = estMinutes * pricing.PricePerMinute;
 
-        var now = DateTime.UtcNow.AddHours(7);
-        var isNight = now.Hour >= 22 || now.Hour < 6;
+        var localNow = DateTime.UtcNow.AddHours(7);
+        var isNight = localNow.Hour >= 22 || localNow.Hour < 6;
         var nightSurcharge = isNight ? pricing.NightSurcharge : 0m;
 
-        var total = Math.Round((baseFare + distanceFare + timeFare + nightSurcharge) / 1000m) * 1000m;
+        var total = GeoUtils.Round1000(baseFare + distanceFare + timeFare + nightSurcharge);
 
         var res = new EstimateFareResponse
         {
@@ -75,14 +127,75 @@ public class BookingService(DrivoDbContext db) : IBookingService
             TimeFare = timeFare,
             NightSurcharge = nightSurcharge,
             TotalEstimatedFare = total,
-            PricingRuleId = pricing.Id > 0 ? pricing.Id : null
+            PricingRuleId = pricing.Id > 0 ? pricing.Id : null,
+            RoutePolyline = route.Polyline,
+            FreePickupKm = pricing.FreePickupKm,
+            PickupFeePerKm = pricing.PickupFeePerKm,
+            WaitingPricePerMin = pricing.WaitingPricePerMin,
+            FreeWaitingMin = pricing.FreeWaitingMin
         };
 
-        return BaseResponse<EstimateFareResponse>.Ok(res);
+        // Xem trước chặng đón: tài xế Online gần nhất có vị trí trong 10 phút (không gọi dịch vụ định tuyến)
+        if (pickupValid)
+        {
+            var since = DateTime.UtcNow - FreshLocationWindow;
+            var drivers = await db.Drivers.AsNoTracking()
+                .Where(d => d.DriverStatus == DriverStatus.Online &&
+                            d.VerificationStatus == VerificationStatus.Approved &&
+                            d.CurrentLatitude != null && d.CurrentLongitude != null &&
+                            d.LastLocationAt != null && d.LastLocationAt >= since)
+                .Select(d => new { Lat = d.CurrentLatitude!.Value, Lng = d.CurrentLongitude!.Value })
+                .ToListAsync();
+
+            var nearest = drivers
+                .Where(d => GeoUtils.IsValid(d.Lat, d.Lng))
+                .Select(d => GeoUtils.HaversineKm(d.Lat, d.Lng, req.PickupLatitude, req.PickupLongitude) * GeoUtils.RoadFactor)
+                .DefaultIfEmpty(-1)
+                .Min();
+
+            if (nearest >= 0)
+            {
+                var pickupKm = Math.Round((decimal)nearest, 1);
+                res.EstimatedPickupKm = pickupKm;
+                res.EstimatedPickupFee = CalcPickupFee(pickupKm, pricing);
+                res.NearestDriverEtaMin = Math.Max(1, (int)Math.Ceiling(nearest / GeoUtils.ScooterSpeedKmh * 60.0));
+            }
+        }
+
+        return (res, route);
     }
+
+    public async Task<BaseResponse<EstimateFareResponse>> EstimateFareAsync(EstimateFareRequest req)
+    {
+        var (fare, _) = await ComputeEstimateAsync(req);
+        return BaseResponse<EstimateFareResponse>.Ok(fare);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  REALTIME HELPERS
+    // ══════════════════════════════════════════════════════════
+
+    private Task NotifyStatusAsync(Booking b) => notifier.BookingStatusChangedAsync(new BookingStatusChangedEvent
+    {
+        BookingId = b.Id,
+        BookingCode = b.BookingCode,
+        Status = b.Status.ToString(),
+        FinalPrice = b.FinalPrice,
+        PickupFee = b.PickupFee,
+        WaitingFee = b.WaitingFee,
+        ExtraDistanceFee = b.ExtraDistanceFee
+    });
+
+    // ══════════════════════════════════════════════════════════
+    //  CUSTOMER METHODS
+    // ══════════════════════════════════════════════════════════
 
     public async Task<BaseResponse<BookingDetailResponse>> CreateBookingAsync(int userId, CreateBookingRequest req)
     {
+        if (!GeoUtils.IsValid(req.PickupLatitude, req.PickupLongitude) ||
+            !GeoUtils.IsValid(req.DestinationLatitude, req.DestinationLongitude))
+            return BaseResponse<BookingDetailResponse>.Fail("Vui lòng chọn điểm đón và điểm đến trên bản đồ (thiếu tọa độ).");
+
         var customer = await db.Customers.FirstOrDefaultAsync(c => c.UserId == userId);
         if (customer == null)
         {
@@ -105,7 +218,8 @@ public class BookingService(DrivoDbContext db) : IBookingService
         if (hasActiveBooking)
             return BaseResponse<BookingDetailResponse>.Fail("Bạn đang có một chuyến đi chưa hoàn thành. Không thể đặt thêm chuyến mới.");
 
-        var estimate = await EstimateFareAsync(new EstimateFareRequest
+        // Server tự tính lại lộ trình, không tin km do client gửi
+        var (fare, route) = await ComputeEstimateAsync(new EstimateFareRequest
         {
             PickupLatitude = req.PickupLatitude,
             PickupLongitude = req.PickupLongitude,
@@ -115,7 +229,6 @@ public class BookingService(DrivoDbContext db) : IBookingService
             Transmission = vehicle.Transmission
         });
 
-        var fare = estimate.Data!;
         var bookingCode = $"DRV{DateTime.UtcNow:yyMMddHHmm}{Random.Shared.Next(100, 999)}";
 
         var booking = new Booking
@@ -134,6 +247,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
             Transmission = vehicle.Transmission,
             EstimatedDistanceKm = fare.EstimatedDistanceKm,
             EstimatedDurationMin = fare.EstimatedDurationMin,
+            RoutePolyline = route.Polyline,
             BaseFare = fare.BaseFare,
             DistanceFare = fare.DistanceFare,
             TimeFare = fare.TimeFare,
@@ -159,6 +273,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
         });
         await db.SaveChangesAsync();
 
+        await NotifyStatusAsync(booking);
         return await GetBookingByIdAsync(booking.Id, userId);
     }
 
@@ -246,6 +361,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
         });
 
         await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
         return BaseResponse<bool>.Ok(true, "Hủy chuyến thành công.");
     }
 
@@ -283,6 +399,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
         });
 
         await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
         return BaseResponse<bool>.Ok(true, "Hủy chuyến thành công.");
     }
 
@@ -302,79 +419,140 @@ public class BookingService(DrivoDbContext db) : IBookingService
             .Take(pageSize)
             .ToListAsync();
 
-        var list = bookings.Select(MapToDetailResponse).ToList();
+        var list = bookings.Select(b => MapToDetailResponse(b)).ToList();
         return BaseResponse<List<BookingDetailResponse>>.Ok(list);
     }
 
-    private static BookingDetailResponse MapToDetailResponse(Booking b)
+    private static T MapToDetailResponse<T>(Booking b, T dto) where T : BookingDetailResponse
     {
-        return new BookingDetailResponse
+        dto.Id = b.Id;
+        dto.BookingCode = b.BookingCode;
+        dto.Status = b.Status.ToString();
+        dto.PickupAddress = b.PickupAddress;
+        dto.PickupLatitude = b.PickupLatitude;
+        dto.PickupLongitude = b.PickupLongitude;
+        dto.DestinationAddress = b.DestinationAddress;
+        dto.DestinationLatitude = b.DestinationLatitude;
+        dto.DestinationLongitude = b.DestinationLongitude;
+        dto.EstimatedDistanceKm = b.EstimatedDistanceKm ?? 0;
+        dto.EstimatedDurationMin = b.EstimatedDurationMin ?? 0;
+        dto.BaseFare = b.BaseFare;
+        dto.DistanceFare = b.DistanceFare;
+        dto.TimeFare = b.TimeFare;
+        dto.Surcharge = b.Surcharge;
+        dto.EstimatedPrice = b.EstimatedPrice;
+        dto.FinalPrice = b.FinalPrice;
+        dto.CustomerNote = b.CustomerNote;
+        dto.CreatedAt = b.CreatedAt;
+        dto.RoutePolyline = b.RoutePolyline;
+        dto.PickupDistanceKm = b.PickupDistanceKm;
+        dto.PickupFee = b.PickupFee;
+        dto.WaitingFee = b.WaitingFee;
+        dto.ExtraDistanceFee = b.ExtraDistanceFee;
+        dto.Discount = b.Discount;
+        dto.ActualDistanceKm = b.ActualDistanceKm;
+        dto.AcceptedAt = b.AcceptedAt;
+        dto.ArrivedAt = b.ArrivedAt;
+        dto.StartedAt = b.StartedAt;
+        dto.CompletedAt = b.CompletedAt;
+        dto.Vehicle = new BookingVehicleSummaryDto
         {
-            Id = b.Id,
-            BookingCode = b.BookingCode,
-            Status = b.Status.ToString(),
-            PickupAddress = b.PickupAddress,
-            PickupLatitude = b.PickupLatitude,
-            PickupLongitude = b.PickupLongitude,
-            DestinationAddress = b.DestinationAddress,
-            DestinationLatitude = b.DestinationLatitude,
-            DestinationLongitude = b.DestinationLongitude,
-            EstimatedDistanceKm = b.EstimatedDistanceKm ?? 0,
-            EstimatedDurationMin = b.EstimatedDurationMin ?? 0,
-            BaseFare = b.BaseFare,
-            DistanceFare = b.DistanceFare,
-            Surcharge = b.Surcharge,
-            EstimatedPrice = b.EstimatedPrice,
-            FinalPrice = b.FinalPrice,
-            CustomerNote = b.CustomerNote,
-            CreatedAt = b.CreatedAt,
-            Vehicle = new BookingVehicleSummaryDto
-            {
-                Id = b.CustomerVehicle.Id,
-                Brand = b.CustomerVehicle.Brand,
-                Model = b.CustomerVehicle.Model,
-                LicensePlate = b.CustomerVehicle.LicensePlate,
-                Transmission = b.CustomerVehicle.Transmission.ToString()
-            },
-            Driver = b.Driver != null ? new BookingDriverSummaryDto
+            Id = b.CustomerVehicle.Id,
+            Brand = b.CustomerVehicle.Brand,
+            Model = b.CustomerVehicle.Model,
+            LicensePlate = b.CustomerVehicle.LicensePlate,
+            Transmission = b.CustomerVehicle.Transmission.ToString()
+        };
+        if (b.Driver != null)
+        {
+            dto.Driver = new BookingDriverSummaryDto
             {
                 Id = b.Driver.Id,
                 FullName = b.Driver.User.FullName,
                 Phone = b.Driver.User.Phone,
                 AvatarUrl = b.Driver.User.AvatarUrl,
                 Rating = b.Driver.RatingAverage
-            } : null
-        };
+            };
+            dto.DriverLatitude = b.Driver.CurrentLatitude;
+            dto.DriverLongitude = b.Driver.CurrentLongitude;
+            dto.DriverLastLocationAt = b.Driver.LastLocationAt;
+        }
+        return dto;
     }
+
+    private static BookingDetailResponse MapToDetailResponse(Booking b) => MapToDetailResponse(b, new BookingDetailResponse());
+
     // ══════════════════════════════════════════════════════════
     //  DRIVER METHODS
     // ══════════════════════════════════════════════════════════
 
-    public async Task<BaseResponse<bool>> ToggleDriverStatusAsync(int userId, bool isOnline)
+    public async Task<BaseResponse<bool>> ToggleDriverStatusAsync(int userId, bool isOnline, decimal? latitude = null, decimal? longitude = null)
     {
         var driver = await db.Drivers.FirstOrDefaultAsync(d => d.UserId == userId);
         if (driver == null)
             return BaseResponse<bool>.Fail("Không tìm thấy thông tin tài xế.");
 
+        var hasLocation = latitude.HasValue && longitude.HasValue && GeoUtils.IsValid(latitude.Value, longitude.Value);
+        var now = DateTime.UtcNow;
+
         driver.DriverStatus = isOnline ? DriverStatus.Online : DriverStatus.Offline;
-        driver.UpdatedAt = DateTime.UtcNow;
+        driver.UpdatedAt = now;
+        if (hasLocation)
+        {
+            driver.CurrentLatitude = Math.Round(latitude!.Value, 7);
+            driver.CurrentLongitude = Math.Round(longitude!.Value, 7);
+            driver.LastLocationAt = now;
+        }
         await db.SaveChangesAsync();
+
+        if (hasLocation)
+        {
+            await notifier.DriverLocationAsync(new DriverLocationEvent
+            {
+                DriverId = driver.Id,
+                Latitude = driver.CurrentLatitude!.Value,
+                Longitude = driver.CurrentLongitude!.Value,
+                DriverStatus = driver.DriverStatus.ToString(),
+                RecordedAt = now
+            });
+        }
+
         return BaseResponse<bool>.Ok(true, isOnline ? "Bạn đang trực tuyến." : "Bạn đã ngoại tuyến.");
     }
 
-    public async Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int driverId)
+    public async Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int userId)
     {
+        var driver = await db.Drivers.AsNoTracking().FirstOrDefaultAsync(d => d.UserId == userId);
+
         // Lấy các cuốc đang tìm tài xế (chưa có driver nào nhận)
-        var bookings = await db.Bookings
+        var query = db.Bookings
             .Include(b => b.CustomerVehicle)
             .Include(b => b.Driver)
                 .ThenInclude(d => d!.User)
             .Where(b => b.Status == BookingStatus.SearchingDriver && b.DriverId == null)
-            .OrderBy(b => b.CreatedAt)
-            .Take(10)
-            .ToListAsync();
+            .OrderBy(b => b.CreatedAt);
 
-        return BaseResponse<List<BookingDetailResponse>>.Ok(bookings.Select(MapToDetailResponse).ToList());
+        if (driver?.CurrentLatitude is { } dLat && driver.CurrentLongitude is { } dLng && GeoUtils.IsValid(dLat, dLng))
+        {
+            var candidates = await query.Take(200).ToListAsync();
+            var nearby = candidates
+                .Where(b => GeoUtils.IsValid(b.PickupLatitude, b.PickupLongitude))
+                .Select(b => (Booking: b, Km: GeoUtils.HaversineKm(dLat, dLng, b.PickupLatitude, b.PickupLongitude)))
+                .Where(x => x.Km <= PendingSearchRadiusKm)
+                .OrderBy(x => x.Km)
+                .Take(10)
+                .Select(x =>
+                {
+                    var dto = MapToDetailResponse(x.Booking);
+                    dto.DistanceToPickupKm = Math.Round((decimal)x.Km, 2);
+                    return dto;
+                })
+                .ToList();
+            return BaseResponse<List<BookingDetailResponse>>.Ok(nearby);
+        }
+
+        var bookings = await query.Take(10).ToListAsync();
+        return BaseResponse<List<BookingDetailResponse>>.Ok(bookings.Select(b => MapToDetailResponse(b)).ToList());
     }
 
     public async Task<BaseResponse<BookingDetailResponse>> AcceptBookingAsync(long bookingId, int userId)
@@ -401,13 +579,27 @@ public class BookingService(DrivoDbContext db) : IBookingService
         if (booking == null)
             return BaseResponse<BookingDetailResponse>.Fail("Cuốc xe không còn khả dụng.");
 
+        // Chặng đón: tài xế (xe điện gấp) → điểm đón
+        if (driver.CurrentLatitude is { } dLat && driver.CurrentLongitude is { } dLng &&
+            GeoUtils.IsValid(dLat, dLng) && GeoUtils.IsValid(booking.PickupLatitude, booking.PickupLongitude))
+        {
+            var rule = await GetPricingRuleForBookingAsync(booking);
+            var pickupRoute = await maps.GetRouteAsync(
+                (double)dLat, (double)dLng,
+                (double)booking.PickupLatitude, (double)booking.PickupLongitude, "TWO_WHEELER");
+            booking.PickupDistanceKm = pickupRoute.DistanceKm;
+            booking.PickupFee = CalcPickupFee(pickupRoute.DistanceKm, rule);
+        }
+
+        var now = DateTime.UtcNow;
         var oldStatus = booking.Status;
         booking.DriverId = driver.Id;
         booking.Status = BookingStatus.DriverAccepted;
-        booking.UpdatedAt = DateTime.UtcNow;
+        booking.AcceptedAt = now;
+        booking.UpdatedAt = now;
 
         driver.DriverStatus = DriverStatus.Busy;
-        driver.UpdatedAt = DateTime.UtcNow;
+        driver.UpdatedAt = now;
 
         db.BookingStatusHistories.Add(new BookingStatusHistory
         {
@@ -416,10 +608,11 @@ public class BookingService(DrivoDbContext db) : IBookingService
             NewStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.DriverAccepted.ToString()),
             ChangedByUserId = userId,
             Reason = "Tài xế nhận cuốc",
-            ChangedAt = DateTime.UtcNow
+            ChangedAt = now
         });
 
         await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
         return await GetBookingByIdAsync(booking.Id, userId);
     }
 
@@ -453,34 +646,22 @@ public class BookingService(DrivoDbContext db) : IBookingService
         if (!validTransitions.TryGetValue(booking.Status, out var expectedNext) || expectedNext != parsedStatus)
             return BaseResponse<BookingDetailResponse>.Fail($"Không thể chuyển từ {booking.Status} sang {parsedStatus}.");
 
+        var now = DateTime.UtcNow;
         var oldStatus = booking.Status;
         booking.Status = parsedStatus;
-        booking.UpdatedAt = DateTime.UtcNow;
+        booking.UpdatedAt = now;
 
-        if (parsedStatus == BookingStatus.Completed)
+        switch (parsedStatus)
         {
-            booking.FinalPrice = booking.EstimatedPrice;
-            driver.TotalTrips += 1;
-            driver.TotalEarnings += booking.EstimatedPrice;
-            driver.DriverStatus = DriverStatus.Online;
-            driver.UpdatedAt = DateTime.UtcNow;
-            
-            // Create Trip record
-            db.Trips.Add(new Trip
-            {
-                BookingId = booking.Id,
-                DriverId = driver.Id,
-                StartTime = booking.UpdatedAt, // using this as proxy
-                EndTime = DateTime.UtcNow,
-                StartLatitude = booking.PickupLatitude,
-                StartLongitude = booking.PickupLongitude,
-                EndLatitude = booking.DestinationLatitude,
-                EndLongitude = booking.DestinationLongitude,
-                ActualDistanceKm = booking.EstimatedDistanceKm,
-                ActualDurationMin = booking.EstimatedDurationMin,
-                Status = "COMPLETED",
-                CreatedAt = DateTime.UtcNow
-            });
+            case BookingStatus.DriverArrived:
+                booking.ArrivedAt = now;
+                break;
+            case BookingStatus.InProgress:
+                booking.StartedAt = now;
+                break;
+            case BookingStatus.Completed:
+                await CompleteBookingAsync(booking, driver, now);
+                break;
         }
 
         db.BookingStatusHistories.Add(new BookingStatusHistory
@@ -490,11 +671,169 @@ public class BookingService(DrivoDbContext db) : IBookingService
             NewStatus = DrivoDbContext.ToSnakeUpper(parsedStatus.ToString()),
             ChangedByUserId = userId,
             Reason = "Cập nhật trạng thái",
-            ChangedAt = DateTime.UtcNow
+            ChangedAt = now
         });
 
         await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
         return BaseResponse<BookingDetailResponse>.Ok(MapToDetailResponse(booking));
+    }
+
+    /// <summary>Chốt giá khi hoàn thành: phí chờ, quãng đường thực tế (GPS), phụ phí vượt quãng đường, Trip.</summary>
+    private async Task CompleteBookingAsync(Booking booking, Driver driver, DateTime now)
+    {
+        booking.CompletedAt = now;
+        var rule = await GetPricingRuleForBookingAsync(booking);
+
+        // Phí chờ: từ lúc tài xế tới nơi đến lúc bắt đầu chạy, vượt quá số phút miễn phí
+        if (booking.ArrivedAt.HasValue && booking.StartedAt.HasValue)
+        {
+            var waitedMin = Math.Floor((decimal)(booking.StartedAt.Value - booking.ArrivedAt.Value).TotalMinutes);
+            booking.WaitingFee = GeoUtils.Round1000(Math.Max(0m, waitedMin - rule.FreeWaitingMin) * rule.WaitingPricePerMin);
+        }
+
+        // Quãng đường thực tế từ lịch sử GPS trong khoảng InProgress
+        var estKm = booking.EstimatedDistanceKm ?? 0m;
+        var actualKm = await ComputeActualDistanceKmAsync(booking.Id, booking.StartedAt, now) ?? estKm;
+        booking.ActualDistanceKm = actualKm;
+
+        var threshold = estKm * (1m + rule.OverDistanceTolerancePercent / 100m);
+        booking.ExtraDistanceFee = actualKm > threshold
+            ? GeoUtils.Round1000((actualKm - estKm) * rule.PricePerKm)
+            : 0m;
+
+        booking.FinalPrice = Math.Max(0m,
+            booking.EstimatedPrice + booking.PickupFee + booking.WaitingFee + booking.ExtraDistanceFee - booking.Discount);
+
+        driver.TotalTrips += 1;
+        driver.TotalEarnings += booking.FinalPrice.Value;
+        driver.DriverStatus = DriverStatus.Online;
+        driver.UpdatedAt = now;
+
+        var durationMin = booking.StartedAt.HasValue
+            ? Math.Max(0, (int)Math.Round((now - booking.StartedAt.Value).TotalMinutes))
+            : booking.EstimatedDurationMin;
+
+        db.Trips.Add(new Trip
+        {
+            BookingId = booking.Id,
+            DriverId = driver.Id,
+            StartTime = booking.StartedAt,
+            EndTime = now,
+            StartLatitude = booking.PickupLatitude,
+            StartLongitude = booking.PickupLongitude,
+            EndLatitude = driver.CurrentLatitude ?? booking.DestinationLatitude,
+            EndLongitude = driver.CurrentLongitude ?? booking.DestinationLongitude,
+            ActualDistanceKm = actualKm,
+            ActualDurationMin = durationMin,
+            Status = "COMPLETED",
+            CreatedAt = now
+        });
+    }
+
+    /// <summary>
+    /// Tổng haversine giữa các điểm GPS liên tiếp của cuốc trong [from, to].
+    /// Bỏ điểm có AccuracyMeters &gt; 50 và đoạn có vận tốc &gt; 150 km/h. Null nếu &lt; 2 điểm hợp lệ.
+    /// </summary>
+    private async Task<decimal?> ComputeActualDistanceKmAsync(long bookingId, DateTime? from, DateTime to)
+    {
+        if (!from.HasValue) return null;
+
+        var points = await db.DriverLocationHistories.AsNoTracking()
+            .Where(h => h.BookingId == bookingId && h.RecordedAt >= from.Value && h.RecordedAt <= to)
+            .OrderBy(h => h.RecordedAt).ThenBy(h => h.Id)
+            .Select(h => new { h.Latitude, h.Longitude, h.AccuracyMeters, h.RecordedAt })
+            .ToListAsync();
+
+        var valid = points.Where(p => p.AccuracyMeters == null || (double)p.AccuracyMeters <= MaxGpsAccuracyMeters).ToList();
+        if (valid.Count < 2) return null;
+
+        double total = 0;
+        var prev = valid[0];
+        var used = 1;
+        foreach (var p in valid.Skip(1))
+        {
+            var km = GeoUtils.HaversineKm(prev.Latitude, prev.Longitude, p.Latitude, p.Longitude);
+            var hours = (p.RecordedAt - prev.RecordedAt).TotalHours;
+            if (hours <= 0) continue;                          // trùng thời điểm
+            if (km / hours > MaxPlausibleSpeedKmh) continue;   // GPS nhảy bất thường
+            total += km;
+            prev = p;
+            used++;
+        }
+
+        return used < 2 ? null : Math.Round((decimal)total, 2);
+    }
+
+    public async Task<BaseResponse<object>> UpdateDriverLocationAsync(int userId, UpdateDriverLocationRequest req)
+    {
+        if (!GeoUtils.IsValid(req.Latitude, req.Longitude))
+            return BaseResponse<object>.Fail("Tọa độ không hợp lệ.");
+
+        var driver = await db.Drivers.FirstOrDefaultAsync(d => d.UserId == userId);
+        if (driver == null)
+            return BaseResponse<object>.Fail("Không tìm thấy tài xế.");
+
+        var now = DateTime.UtcNow;
+        if (driver.LastLocationAt.HasValue && now - driver.LastLocationAt.Value < LocationThrottle)
+            return BaseResponse<object>.Ok(new { ok = true });
+
+        var lat = Math.Round(req.Latitude, 7);
+        var lng = Math.Round(req.Longitude, 7);
+        decimal? accuracy = req.AccuracyMeters is { } a && a >= 0 ? Math.Round(Math.Min(a, 999_999m), 2) : null;
+        decimal? speed = req.SpeedKmh is { } s && s >= 0 ? Math.Round(Math.Min(s, 999_999m), 2) : null;
+        decimal? heading = req.Heading is { } h ? Math.Round(((h % 360m) + 360m) % 360m, 2) : null;
+
+        driver.CurrentLatitude = lat;
+        driver.CurrentLongitude = lng;
+        driver.LastLocationAt = now;
+
+        var activeBookingId = await db.Bookings
+            .Where(b => b.DriverId == driver.Id)
+            .Where(IsDriverActiveStatus)
+            .OrderByDescending(b => b.CreatedAt)
+            .Select(b => (long?)b.Id)
+            .FirstOrDefaultAsync();
+
+        var saveHistory = activeBookingId.HasValue;
+        if (!saveHistory)
+        {
+            var lastIdle = await db.DriverLocationHistories
+                .Where(x => x.DriverId == driver.Id && x.BookingId == null)
+                .MaxAsync(x => (DateTime?)x.RecordedAt);
+            saveHistory = lastIdle == null || now - lastIdle.Value >= IdleHistoryInterval;
+        }
+
+        if (saveHistory)
+        {
+            db.DriverLocationHistories.Add(new DriverLocationHistory
+            {
+                DriverId = driver.Id,
+                BookingId = activeBookingId,
+                Latitude = lat,
+                Longitude = lng,
+                AccuracyMeters = accuracy,
+                SpeedKmh = speed,
+                Heading = heading,
+                RecordedAt = now
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        await notifier.DriverLocationAsync(new DriverLocationEvent
+        {
+            DriverId = driver.Id,
+            BookingId = activeBookingId,
+            Latitude = lat,
+            Longitude = lng,
+            Heading = heading,
+            SpeedKmh = speed,
+            DriverStatus = driver.DriverStatus.ToString(),
+            RecordedAt = now
+        });
+
+        return BaseResponse<object>.Ok(new { ok = true });
     }
 
     public async Task<BaseResponse<BookingDetailResponse?>> GetDriverActiveBookingAsync(int userId)
@@ -532,7 +871,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
             .Take(pageSize)
             .ToListAsync();
 
-        return BaseResponse<List<BookingDetailResponse>>.Ok(bookings.Select(MapToDetailResponse).ToList());
+        return BaseResponse<List<BookingDetailResponse>>.Ok(bookings.Select(b => MapToDetailResponse(b)).ToList());
     }
 
 
@@ -541,20 +880,20 @@ public class BookingService(DrivoDbContext db) : IBookingService
         var booking = await db.Bookings
             .Include(b => b.Trip)
             .FirstOrDefaultAsync(b => b.Id == bookingId && b.CustomerId == customerId);
-            
+
         if (booking == null)
             return BaseResponse<bool>.Fail("Không tìm thấy chuyến đi.");
-            
+
         if (booking.Status != BookingStatus.Completed)
             return BaseResponse<bool>.Fail("Chỉ có thể đánh giá chuyến đi đã hoàn thành.");
-            
+
         if (booking.Trip == null)
             return BaseResponse<bool>.Fail("Không tìm thấy thông tin chi tiết chuyến đi (Trip).");
-            
+
         var existingRating = await db.Ratings.FirstOrDefaultAsync(r => r.TripId == booking.Trip.Id);
         if (existingRating != null)
             return BaseResponse<bool>.Fail("Chuyến đi này đã được đánh giá.");
-            
+
         var rating = new Rating
         {
             TripId = booking.Trip.Id,
@@ -564,7 +903,7 @@ public class BookingService(DrivoDbContext db) : IBookingService
             Comment = comment,
             CreatedAt = DateTime.UtcNow
         };
-        
+
         db.Ratings.Add(rating);
         await db.SaveChangesAsync();
 
@@ -584,5 +923,114 @@ public class BookingService(DrivoDbContext db) : IBookingService
         }
 
         return BaseResponse<bool>.Ok(true, "Đánh giá thành công.");
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  ADMIN METHODS
+    // ══════════════════════════════════════════════════════════
+
+    public async Task<BaseResponse<AdminBookingDetailResponse>> GetAdminBookingDetailAsync(long bookingId)
+    {
+        var b = await db.Bookings.AsNoTracking()
+            .Include(x => x.Customer).ThenInclude(c => c.User)
+            .Include(x => x.CustomerVehicle)
+            .Include(x => x.Driver).ThenInclude(d => d!.User)
+            .Include(x => x.PricingRule)
+            .FirstOrDefaultAsync(x => x.Id == bookingId);
+
+        if (b == null)
+            return BaseResponse<AdminBookingDetailResponse>.Fail("Không tìm thấy chuyến đi");
+
+        var dto = MapToDetailResponse(b, new AdminBookingDetailResponse());
+        dto.Customer = new AdminBookingCustomerDto
+        {
+            Id = b.Customer.Id,
+            FullName = b.Customer.User.FullName,
+            Phone = b.Customer.User.Phone
+        };
+        dto.CancelledBy = b.CancelledBy;
+        dto.CancellationReason = b.CancellationReason;
+        dto.CancelledAt = b.CancelledAt;
+
+        dto.Trail = await db.DriverLocationHistories.AsNoTracking()
+            .Where(h => h.BookingId == bookingId)
+            .OrderBy(h => h.RecordedAt).ThenBy(h => h.Id)
+            .Take(10000)
+            .Select(h => new TrailPointDto { Latitude = h.Latitude, Longitude = h.Longitude, RecordedAt = h.RecordedAt })
+            .ToListAsync();
+
+        var history = await db.BookingStatusHistories.AsNoTracking()
+            .Where(h => h.BookingId == bookingId)
+            .OrderBy(h => h.ChangedAt).ThenBy(h => h.Id)
+            .ToListAsync();
+        dto.StatusHistory = history.Select(h => new BookingStatusHistoryDto
+        {
+            Status = DrivoDbContext.FromSnakeUpper<BookingStatus>(h.NewStatus).ToString(),
+            OldStatus = h.OldStatus != null ? DrivoDbContext.FromSnakeUpper<BookingStatus>(h.OldStatus).ToString() : null,
+            ChangedAt = h.ChangedAt,
+            Note = h.Reason
+        }).ToList();
+
+        if (b.PricingRule is { } r)
+        {
+            dto.PricingRule = new PricingRuleSnapshotDto
+            {
+                Id = r.Id,
+                VehicleType = r.VehicleType.ToString(),
+                BaseFare = r.BaseFare,
+                PricePerKm = r.PricePerKm,
+                PricePerMinute = r.PricePerMinute,
+                NightSurcharge = r.NightSurcharge,
+                WaitingPricePerMin = r.WaitingPricePerMin,
+                FreePickupKm = r.FreePickupKm,
+                PickupFeePerKm = r.PickupFeePerKm,
+                FreeWaitingMin = r.FreeWaitingMin,
+                OverDistanceTolerancePercent = r.OverDistanceTolerancePercent
+            };
+        }
+
+        return BaseResponse<AdminBookingDetailResponse>.Ok(dto);
+    }
+
+    public async Task<BaseResponse<bool>> CancelBookingByAdminAsync(long bookingId, int adminUserId, string? reason)
+    {
+        var booking = await db.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId);
+        if (booking == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy chuyến đi");
+
+        if (booking.Status == BookingStatus.Completed || booking.Status == BookingStatus.Cancelled)
+            return BaseResponse<bool>.Fail("Chuyến đi đã kết thúc hoặc đã hủy trước đó.");
+
+        var now = DateTime.UtcNow;
+        var oldStatus = booking.Status;
+        booking.Status = BookingStatus.Cancelled;
+        booking.CancelledBy = "ADMIN";
+        booking.CancellationReason = string.IsNullOrWhiteSpace(reason) ? "Admin hủy chuyến" : reason;
+        booking.CancelledAt = now;
+        booking.UpdatedAt = now;
+
+        if (booking.DriverId.HasValue)
+        {
+            var driver = await db.Drivers.FirstOrDefaultAsync(d => d.Id == booking.DriverId.Value);
+            if (driver != null && driver.DriverStatus == DriverStatus.Busy)
+            {
+                driver.DriverStatus = DriverStatus.Online;
+                driver.UpdatedAt = now;
+            }
+        }
+
+        db.BookingStatusHistories.Add(new BookingStatusHistory
+        {
+            BookingId = booking.Id,
+            OldStatus = DrivoDbContext.ToSnakeUpper(oldStatus.ToString()),
+            NewStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.Cancelled.ToString()),
+            ChangedByUserId = adminUserId > 0 ? adminUserId : null,
+            Reason = booking.CancellationReason,
+            ChangedAt = now
+        });
+
+        await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
+        return BaseResponse<bool>.Ok(true, "Đã hủy chuyến đi thành công");
     }
 }

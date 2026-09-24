@@ -1,4 +1,5 @@
-﻿import 'dart:convert';
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -64,6 +65,10 @@ class CustomerVehicle {
   }
 }
 
+double? _toD(dynamic v) => v == null ? null : (v is num ? v.toDouble() : double.tryParse(v.toString()));
+int? _toI(dynamic v) => v == null ? null : (v is num ? v.toInt() : int.tryParse(v.toString()));
+DateTime? _toDt(dynamic v) => v == null ? null : DateTime.tryParse(v.toString());
+
 class FareEstimate {
   final double estimatedDistanceKm;
   final int estimatedDurationMin;
@@ -72,6 +77,15 @@ class FareEstimate {
   final double timeFare;
   final double nightSurcharge;
   final double totalEstimatedFare;
+  // Maps / phí đón (xe điện gấp của tài xế -> điểm đón)
+  final String? routePolyline;
+  final double? estimatedPickupKm;
+  final double? estimatedPickupFee;
+  final int? nearestDriverEtaMin;
+  final double freePickupKm;
+  final double pickupFeePerKm;
+  final double waitingPricePerMin;
+  final int freeWaitingMin;
 
   FareEstimate({
     required this.estimatedDistanceKm,
@@ -81,16 +95,89 @@ class FareEstimate {
     required this.timeFare,
     required this.nightSurcharge,
     required this.totalEstimatedFare,
+    this.routePolyline,
+    this.estimatedPickupKm,
+    this.estimatedPickupFee,
+    this.nearestDriverEtaMin,
+    this.freePickupKm = 0,
+    this.pickupFeePerKm = 0,
+    this.waitingPricePerMin = 0,
+    this.freeWaitingMin = 0,
   });
 
   factory FareEstimate.fromJson(Map<String, dynamic> j) => FareEstimate(
-    estimatedDistanceKm: (j['estimatedDistanceKm'] as num).toDouble(),
-    estimatedDurationMin: j['estimatedDurationMin'],
-    baseFare: (j['baseFare'] as num).toDouble(),
-    distanceFare: (j['distanceFare'] as num).toDouble(),
-    timeFare: (j['timeFare'] as num).toDouble(),
-    nightSurcharge: (j['nightSurcharge'] as num).toDouble(),
-    totalEstimatedFare: (j['totalEstimatedFare'] as num).toDouble(),
+    estimatedDistanceKm: _toD(j['estimatedDistanceKm']) ?? 0,
+    estimatedDurationMin: _toI(j['estimatedDurationMin']) ?? 0,
+    baseFare: _toD(j['baseFare']) ?? 0,
+    distanceFare: _toD(j['distanceFare']) ?? 0,
+    timeFare: _toD(j['timeFare']) ?? 0,
+    nightSurcharge: _toD(j['nightSurcharge']) ?? 0,
+    totalEstimatedFare: _toD(j['totalEstimatedFare']) ?? 0,
+    routePolyline: j['routePolyline'],
+    estimatedPickupKm: _toD(j['estimatedPickupKm']),
+    estimatedPickupFee: _toD(j['estimatedPickupFee']),
+    nearestDriverEtaMin: _toI(j['nearestDriverEtaMin']),
+    freePickupKm: _toD(j['freePickupKm']) ?? 0,
+    pickupFeePerKm: _toD(j['pickupFeePerKm']) ?? 0,
+    waitingPricePerMin: _toD(j['waitingPricePerMin']) ?? 0,
+    freeWaitingMin: _toI(j['freeWaitingMin']) ?? 0,
+  );
+}
+
+// ── Maps models ────────────────────────────────────────────────
+class PlaceSuggestion {
+  final String placeId;
+  final String mainText;
+  final String secondaryText;
+  /// Toạ độ đi kèm gợi ý (OSM/Photon) — có thì không cần gọi /maps/place.
+  final double? latitude;
+  final double? longitude;
+
+  PlaceSuggestion({
+    required this.placeId,
+    required this.mainText,
+    required this.secondaryText,
+    this.latitude,
+    this.longitude,
+  });
+
+  factory PlaceSuggestion.fromJson(Map<String, dynamic> j) => PlaceSuggestion(
+    placeId: j['placeId'] ?? '',
+    mainText: j['mainText'] ?? '',
+    secondaryText: j['secondaryText'] ?? '',
+    latitude: (j['latitude'] as num?)?.toDouble(),
+    longitude: (j['longitude'] as num?)?.toDouble(),
+  );
+}
+
+/// Kết quả /maps/place/{id} và /maps/reverse-geocode.
+class GeoPlace {
+  final String? placeId;
+  final String address;
+  final double latitude;
+  final double longitude;
+
+  GeoPlace({this.placeId, required this.address, required this.latitude, required this.longitude});
+
+  factory GeoPlace.fromJson(Map<String, dynamic> j) => GeoPlace(
+    placeId: j['placeId'],
+    address: j['address'] ?? '',
+    latitude: _toD(j['latitude']) ?? 0,
+    longitude: _toD(j['longitude']) ?? 0,
+  );
+}
+
+class RouteInfo {
+  final double distanceKm;
+  final int durationMin;
+  final String? polyline;
+
+  RouteInfo({required this.distanceKm, required this.durationMin, this.polyline});
+
+  factory RouteInfo.fromJson(Map<String, dynamic> j) => RouteInfo(
+    distanceKm: _toD(j['distanceKm']) ?? 0,
+    durationMin: _toI(j['durationMin']) ?? 0,
+    polyline: j['polyline'],
   );
 }
 
@@ -106,7 +193,32 @@ class BookingDetail {
   final String vehicleInfo;
   final String? driverName;
   final String? driverPhone;
+  final int? driverId;
   final String? customerNote;
+  // Toạ độ & lộ trình
+  final double? pickupLatitude;
+  final double? pickupLongitude;
+  final double? destinationLatitude;
+  final double? destinationLongitude;
+  final double estimatedDistanceKm;
+  final int estimatedDurationMin;
+  final String? routePolyline;
+  // Phí phát sinh
+  final double? pickupDistanceKm;
+  final double pickupFee;
+  final double waitingFee;
+  final double extraDistanceFee;
+  final double discount;
+  final double? actualDistanceKm;
+  // Mốc thời gian
+  final DateTime? acceptedAt;
+  final DateTime? arrivedAt;
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+  // Vị trí tài xế (khi đã có tài xế)
+  final double? driverLatitude;
+  final double? driverLongitude;
+  final DateTime? driverLastLocationAt;
 
   BookingDetail({
     required this.id,
@@ -120,7 +232,28 @@ class BookingDetail {
     required this.vehicleInfo,
     this.driverName,
     this.driverPhone,
+    this.driverId,
     this.customerNote,
+    this.pickupLatitude,
+    this.pickupLongitude,
+    this.destinationLatitude,
+    this.destinationLongitude,
+    this.estimatedDistanceKm = 0,
+    this.estimatedDurationMin = 0,
+    this.routePolyline,
+    this.pickupDistanceKm,
+    this.pickupFee = 0,
+    this.waitingFee = 0,
+    this.extraDistanceFee = 0,
+    this.discount = 0,
+    this.actualDistanceKm,
+    this.acceptedAt,
+    this.arrivedAt,
+    this.startedAt,
+    this.completedAt,
+    this.driverLatitude,
+    this.driverLongitude,
+    this.driverLastLocationAt,
   });
 
   factory BookingDetail.fromJson(Map<String, dynamic> j) {
@@ -142,9 +275,37 @@ class BookingDetail {
       vehicleInfo: vInfo,
       driverName: d != null ? d['fullName'] : null,
       driverPhone: d != null ? d['phone'] : null,
+      driverId: d != null ? _toI(d['id']) : null,
       customerNote: j['customerNote'],
+      pickupLatitude: _toD(j['pickupLatitude']),
+      pickupLongitude: _toD(j['pickupLongitude']),
+      destinationLatitude: _toD(j['destinationLatitude']),
+      destinationLongitude: _toD(j['destinationLongitude']),
+      estimatedDistanceKm: _toD(j['estimatedDistanceKm']) ?? 0,
+      estimatedDurationMin: _toI(j['estimatedDurationMin']) ?? 0,
+      routePolyline: j['routePolyline'],
+      pickupDistanceKm: _toD(j['pickupDistanceKm']),
+      pickupFee: _toD(j['pickupFee']) ?? 0,
+      waitingFee: _toD(j['waitingFee']) ?? 0,
+      extraDistanceFee: _toD(j['extraDistanceFee']) ?? 0,
+      discount: _toD(j['discount']) ?? 0,
+      actualDistanceKm: _toD(j['actualDistanceKm']),
+      acceptedAt: _toDt(j['acceptedAt']),
+      arrivedAt: _toDt(j['arrivedAt']),
+      startedAt: _toDt(j['startedAt']),
+      completedAt: _toDt(j['completedAt']),
+      driverLatitude: _toD(j['driverLatitude']),
+      driverLongitude: _toD(j['driverLongitude']),
+      driverLastLocationAt: _toDt(j['driverLastLocationAt']),
     );
   }
+
+  bool get hasPickupCoords =>
+      pickupLatitude != null && pickupLongitude != null && !(pickupLatitude == 0 && pickupLongitude == 0);
+  bool get hasDestinationCoords =>
+      destinationLatitude != null && destinationLongitude != null &&
+      !(destinationLatitude == 0 && destinationLongitude == 0);
+  bool get hasDriverCoords => driverLatitude != null && driverLongitude != null;
 
   String get statusDisplay {
     switch (status) {
@@ -228,6 +389,21 @@ class DriverBooking {
   final String? customerNote;
   final double? finalPrice;
   final DateTime createdAt;
+  // Maps / phí
+  final double? pickupLatitude;
+  final double? pickupLongitude;
+  final double? destinationLatitude;
+  final double? destinationLongitude;
+  final String? routePolyline;
+  final double? distanceToPickupKm;
+  final double? pickupDistanceKm;
+  final double pickupFee;
+  final double waitingFee;
+  final double extraDistanceFee;
+  final double discount;
+  final double? actualDistanceKm;
+  final String? customerName;
+  final String? customerPhone;
 
   DriverBooking({
     required this.id,
@@ -245,11 +421,47 @@ class DriverBooking {
     this.customerNote,
     this.finalPrice,
     required this.createdAt,
+    this.pickupLatitude,
+    this.pickupLongitude,
+    this.destinationLatitude,
+    this.destinationLongitude,
+    this.routePolyline,
+    this.distanceToPickupKm,
+    this.pickupDistanceKm,
+    this.pickupFee = 0,
+    this.waitingFee = 0,
+    this.extraDistanceFee = 0,
+    this.discount = 0,
+    this.actualDistanceKm,
+    this.customerName,
+    this.customerPhone,
   });
+
+  bool get hasPickupCoords =>
+      pickupLatitude != null && pickupLongitude != null && !(pickupLatitude == 0 && pickupLongitude == 0);
+  bool get hasDestinationCoords =>
+      destinationLatitude != null && destinationLongitude != null &&
+      !(destinationLatitude == 0 && destinationLongitude == 0);
 
   factory DriverBooking.fromJson(Map<String, dynamic> j) {
     final v = j['vehicle'] ?? {};
+    final c = j['customer'];
     return DriverBooking(
+      finalPrice: _toD(j['finalPrice']),
+      pickupLatitude: _toD(j['pickupLatitude']),
+      pickupLongitude: _toD(j['pickupLongitude']),
+      destinationLatitude: _toD(j['destinationLatitude']),
+      destinationLongitude: _toD(j['destinationLongitude']),
+      routePolyline: j['routePolyline'],
+      distanceToPickupKm: _toD(j['distanceToPickupKm']),
+      pickupDistanceKm: _toD(j['pickupDistanceKm']),
+      pickupFee: _toD(j['pickupFee']) ?? 0,
+      waitingFee: _toD(j['waitingFee']) ?? 0,
+      extraDistanceFee: _toD(j['extraDistanceFee']) ?? 0,
+      discount: _toD(j['discount']) ?? 0,
+      actualDistanceKm: _toD(j['actualDistanceKm']),
+      customerName: c is Map ? c['fullName'] : j['customerName'],
+      customerPhone: c is Map ? c['phone'] : j['customerPhone'],
       id: j['id'],
       bookingCode: j['bookingCode'] ?? '',
       status: j['status'] ?? '',
@@ -303,7 +515,18 @@ class DriverBooking {
 
 // ── API Service ────────────────────────────────────────────────
 class ApiService {
-  static const String baseUrl = 'http://192.168.110.65:5270/api/v1';
+  // IP máy chạy API, truyền lúc build: flutter run --dart-define=API_HOST=192.168.x.x
+  // (script run-mobile.ps1 ở thư mục gốc tự dò IP và truyền vào).
+  // Không truyền: web dùng host của trang, Android emulator dùng 10.0.2.2.
+  static const String _apiHost = String.fromEnvironment('API_HOST');
+  static const String _apiPort = String.fromEnvironment('API_PORT', defaultValue: '5270');
+  static final String baseUrl = 'http://${_resolveHost()}:$_apiPort/api/v1';
+
+  static String _resolveHost() {
+    if (_apiHost.isNotEmpty) return _apiHost;
+    if (kIsWeb) return Uri.base.host;
+    return '10.0.2.2';
+  }
   static String? _token;
   static String? _refreshToken;
 
@@ -399,7 +622,80 @@ class ApiService {
   static Future<Map<String, dynamic>> addCustomerVehicle(Map<String, dynamic> data) => post('/customer/vehicles', data);
   static Future<Map<String, dynamic>> deleteCustomerVehicle(int id) => delete('/customer/vehicles/$id');
 
+  // Maps (proxy qua backend, dịch vụ OSM miễn phí)
+  static Future<Map<String, dynamic>> _safeGet(String path) async {
+    try {
+      return await get(path);
+    } catch (e) {
+      return {'success': false, 'message': 'Lỗi kết nối: $e'};
+    }
+  }
+
+  static Future<List<PlaceSuggestion>> mapsAutocomplete(String input,
+      {double? lat, double? lng, String? sessionToken}) async {
+    final q = <String, String>{
+      'input': input,
+      if (lat != null) 'lat': '$lat',
+      if (lng != null) 'lng': '$lng',
+      'sessionToken': ?sessionToken,
+    };
+    final res = await _safeGet('/maps/autocomplete?${Uri(queryParameters: q).query}');
+    final data = res['data'];
+    if (res['success'] == true && data is List) {
+      return data.map((x) => PlaceSuggestion.fromJson(Map<String, dynamic>.from(x))).toList();
+    }
+    return [];
+  }
+
+  static Future<GeoPlace?> mapsPlace(String placeId, {String? sessionToken}) async {
+    final q = sessionToken != null ? '?${Uri(queryParameters: {'sessionToken': sessionToken}).query}' : '';
+    final res = await _safeGet('/maps/place/${Uri.encodeComponent(placeId)}$q');
+    if (res['success'] == true && res['data'] is Map) {
+      return GeoPlace.fromJson(Map<String, dynamic>.from(res['data']));
+    }
+    return null;
+  }
+
+  static Future<GeoPlace?> reverseGeocode(double lat, double lng) async {
+    final res = await _safeGet('/maps/reverse-geocode?lat=$lat&lng=$lng');
+    if (res['success'] == true && res['data'] is Map) {
+      final p = GeoPlace.fromJson(Map<String, dynamic>.from(res['data']));
+      if (p.address.isNotEmpty) return p;
+    }
+    return null;
+  }
+
+  static Future<RouteInfo?> mapsRoute({
+    required double originLat,
+    required double originLng,
+    required double destLat,
+    required double destLng,
+    String mode = 'DRIVE',
+  }) async {
+    try {
+      final res = await post('/maps/route', {
+        'originLatitude': originLat,
+        'originLongitude': originLng,
+        'destinationLatitude': destLat,
+        'destinationLongitude': destLng,
+        'mode': mode,
+      });
+      if (res['success'] == true && res['data'] is Map) {
+        return RouteInfo.fromJson(Map<String, dynamic>.from(res['data']));
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<bool> mapsStatus() async {
+    final res = await _safeGet('/maps/status');
+    final data = res['data'];
+    return res['success'] == true && data is Map && data['provider'] != null;
+  }
+
   // Bookings
+  // estimateFare: gửi pickupLatitude/pickupLongitude/destinationLatitude/destinationLongitude
+  // (+ vehicleType, transmission). createBooking: thêm pickupAddress/destinationAddress.
   static Future<Map<String, dynamic>> estimateFare(Map<String, dynamic> data) => post('/bookings/estimate', data);
   static Future<Map<String, dynamic>> createBooking(Map<String, dynamic> data) => post('/bookings', data);
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');
@@ -414,8 +710,25 @@ class ApiService {
   static Future<Map<String, dynamic>> changePassword(String current, String newPw) =>
       post('/driver/change-password', {'currentPassword': current, 'newPassword': newPw});
   // Driver Booking
-  static Future<Map<String, dynamic>> toggleDriverStatus(bool isOnline) =>
-      post('/driver/toggle-status', {'isOnline': isOnline});
+  static Future<Map<String, dynamic>> toggleDriverStatus(bool isOnline, {double? latitude, double? longitude}) =>
+      post('/driver/toggle-status', {
+        'isOnline': isOnline,
+        if (latitude != null && longitude != null) 'latitude': latitude,
+        if (latitude != null && longitude != null) 'longitude': longitude,
+      });
+  static Future<Map<String, dynamic>> updateDriverLocation({
+    required double latitude,
+    required double longitude,
+    double? accuracyMeters,
+    double? speedKmh,
+    double? heading,
+  }) => post('/driver/location', {
+    'latitude': latitude,
+    'longitude': longitude,
+    'accuracyMeters': ?accuracyMeters,
+    'speedKmh': ?speedKmh,
+    'heading': ?heading,
+  });
   static Future<Map<String, dynamic>> getDriverPendingBookings() =>
       get('/driver/pending-bookings');
   static Future<Map<String, dynamic>> acceptBooking(int id) =>

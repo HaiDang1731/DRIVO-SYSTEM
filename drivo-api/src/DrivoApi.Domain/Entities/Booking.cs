@@ -32,6 +32,19 @@ public class Booking
     public decimal EstimatedPrice { get; set; }
     public decimal? FinalPrice { get; set; }
 
+    // Pickup leg (driver scooter -> pickup), waiting & over-distance fees
+    public decimal? PickupDistanceKm { get; set; }
+    public decimal PickupFee { get; set; }
+    public decimal WaitingFee { get; set; }
+    public decimal ExtraDistanceFee { get; set; }
+    public decimal? ActualDistanceKm { get; set; }
+    public string? RoutePolyline { get; set; }
+
+    public DateTime? AcceptedAt { get; set; }
+    public DateTime? ArrivedAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+
     public BookingStatus Status { get; set; } = BookingStatus.Pending;
     public string? CancelledBy { get; set; }
     public string? CancellationReason { get; set; }

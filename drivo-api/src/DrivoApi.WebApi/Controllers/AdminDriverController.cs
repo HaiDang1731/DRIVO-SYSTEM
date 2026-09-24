@@ -1,4 +1,4 @@
-using DrivoApi.Application.DTOs.Admin;
+﻿using DrivoApi.Application.DTOs.Admin;
 using DrivoApi.Application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,7 +10,7 @@ namespace DrivoApi.WebApi.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/admin/drivers")]
-[Authorize(Roles = "ADMIN")]
+[Authorize(Roles = "ADMIN,Admin")]
 public class AdminDriverController(IAdminDriverService adminDriverService) : ControllerBase
 {
     private int AdminUserId =>
@@ -77,6 +77,15 @@ public class AdminDriverController(IAdminDriverService adminDriverService) : Con
         int driverId, [FromQuery] string status)
     {
         var result = await adminDriverService.SetDriverAccountStatusAsync(driverId, status, AdminUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Admin đặt lại mật khẩu cho tài xế</summary>
+    [HttpPost("{driverId}/reset-password")]
+    public async Task<IActionResult> ResetPassword(
+        int driverId, [FromBody] ResetDriverPasswordRequest? request)
+    {
+        var result = await adminDriverService.ResetDriverPasswordAsync(driverId, request?.NewPassword, AdminUserId);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 }

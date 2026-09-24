@@ -41,6 +41,9 @@ public class DriverProfileResponse
 public class ToggleDriverStatusRequest
 {
     public bool IsOnline { get; set; }
+    /// <summary>Tùy chọn: vị trí hiện tại của tài xế khi bật/tắt</summary>
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
 }
 
 // ── Update booking status ─────────────────────────────────────

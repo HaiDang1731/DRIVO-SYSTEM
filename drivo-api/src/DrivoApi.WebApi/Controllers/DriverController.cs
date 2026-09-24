@@ -50,7 +50,15 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
     [HttpPost("toggle-status")]
     public async Task<IActionResult> ToggleStatus([FromBody] ToggleDriverStatusRequest request)
     {
-        var result = await bookingService.ToggleDriverStatusAsync(CurrentUserId, request.IsOnline);
+        var result = await bookingService.ToggleDriverStatusAsync(CurrentUserId, request.IsOnline, request.Latitude, request.Longitude);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Cập nhật vị trí GPS hiện tại (gọi định kỳ khi trực tuyến / đang chạy cuốc)</summary>
+    [HttpPost("location")]
+    public async Task<IActionResult> UpdateLocation([FromBody] DrivoApi.Application.DTOs.Tracking.UpdateDriverLocationRequest request)
+    {
+        var result = await bookingService.UpdateDriverLocationAsync(CurrentUserId, request);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 

@@ -1,7 +1,13 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart' show Position;
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../../../core/api_service.dart';
+import '../../../../../core/drivo_map.dart';
+import '../../../../../core/geo_utils.dart';
+import '../../../../../core/location_service.dart';
 import '../../../../../core/theme.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -13,7 +19,7 @@ class DriverHomeScreen extends StatefulWidget {
   State<DriverHomeScreen> createState() => _DriverHomeScreenState();
 }
 
-class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProviderStateMixin {
+class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
   int _tab = 0;
   DriverProfile? _profile;
   bool _loadingProfile = true;
@@ -37,9 +43,28 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
   // Step update loading
   bool _updatingStatus = false;
 
+  // GPS: gửi vị trí lên server khi online / đang chạy chuyến (chỉ khi app ở foreground)
+  StreamSubscription<Position>? _posSub;
+  Timer? _locationSendTimer;
+  Position? _lastPos;
+  Position? _lastSentPos;
+  DateTime _lastSentAt = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _sendingLocation = false;
+  bool _appInForeground = true;
+  bool _locationWarned = false;
+
+  // Bản đồ chuyến đi
+  DrivoMapController? _tripMapCtrl;
+  String? _fittedKey; // bookingId:status đã căn camera
+  String? _approachPolyline; // lộ trình xe điện gấp -> điểm đón (Routes TWO_WHEELER)
+  int? _approachForBookingId;
+
+  LatLng? get _myLatLng => _lastPos == null ? null : LatLng(_lastPos!.latitude, _lastPos!.longitude);
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _radarCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
     _radarAnim = Tween<double>(begin: 0.4, end: 1.0).animate(
       CurvedAnimation(parent: _radarCtrl, curve: Curves.easeOut),
@@ -50,9 +75,92 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _radarCtrl.dispose();
     _pollingTimer?.cancel();
+    _stopLocationUpdates();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Chỉ gửi GPS khi app đang mở (không có background location).
+    _appInForeground = state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+    _syncLocationUpdates();
+  }
+
+  // ── GPS tài xế ──────────────────────────────────────────────
+  bool get _shouldTrackLocation => _appInForeground && (_isOnline || _activeBooking != null);
+
+  void _syncLocationUpdates() {
+    if (_shouldTrackLocation) {
+      _startLocationUpdates();
+    } else {
+      _stopLocationUpdates();
+    }
+  }
+
+  Future<void> _startLocationUpdates() async {
+    if (_posSub != null) return;
+    final err = await LocationService.ensurePermission();
+    if (!mounted) return;
+    if (err != null) {
+      if (!_locationWarned) {
+        _locationWarned = true;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(err),
+          backgroundColor: DrivoColors.warning,
+          action: SnackBarAction(label: 'Cài đặt', onPressed: LocationService.openSettings),
+        ));
+      }
+      return;
+    }
+    if (_posSub != null || !_shouldTrackLocation) return;
+    _posSub = LocationService.positionStream(distanceFilterMeters: 10).listen(
+      (pos) {
+        final first = _lastPos == null;
+        _lastPos = pos;
+        if (mounted && _activeBooking != null) setState(() {});
+        if (first) _maybeSendLocation(force: true);
+      },
+      onError: (_) {},
+    );
+    // Gửi tối đa 5 s/lần; nếu đứng yên vẫn gửi "heartbeat" mỗi 60 s để server biết vị trí còn mới.
+    _locationSendTimer?.cancel();
+    _locationSendTimer = Timer.periodic(const Duration(seconds: 5), (_) => _maybeSendLocation());
+  }
+
+  void _stopLocationUpdates() {
+    _posSub?.cancel();
+    _posSub = null;
+    _locationSendTimer?.cancel();
+    _locationSendTimer = null;
+  }
+
+  Future<void> _maybeSendLocation({bool force = false}) async {
+    final pos = _lastPos;
+    if (pos == null || _sendingLocation) return;
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastSentAt);
+    if (elapsed < const Duration(seconds: 5)) return;
+    final moved = !identical(pos, _lastSentPos);
+    if (!force && !moved && elapsed < const Duration(seconds: 60)) return;
+    _sendingLocation = true;
+    try {
+      await ApiService.updateDriverLocation(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        accuracyMeters: pos.accuracy > 0 ? pos.accuracy : null,
+        speedKmh: pos.speed >= 0 ? pos.speed * 3.6 : null,
+        heading: pos.heading >= 0 ? pos.heading : null,
+      );
+      _lastSentPos = pos;
+      _lastSentAt = now;
+    } catch (_) {
+      // mạng chập chờn -> lần sau gửi lại
+    } finally {
+      _sendingLocation = false;
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -72,6 +180,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
       if (_isOnline && _activeBooking == null) {
         _startPolling();
       }
+      _syncLocationUpdates();
     } else {
       setState(() => _loadingProfile = false);
     }
@@ -84,11 +193,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
         setState(() {
           _activeBooking = DriverBooking.fromJson(res['data']);
           });
+        _loadApproachRoute();
       } else {
         setState(() {
           _activeBooking = null;
           });
       }
+      _syncLocationUpdates();
     }
   }
 
@@ -112,6 +223,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           final updated = DriverBooking.fromJson(res['data']);
           if (updated.status == 'Cancelled') {
              setState(() => _activeBooking = null);
+             _syncLocationUpdates();
              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                content: Text('Khách hàng đã hủy chuyến đi.'), backgroundColor: DrivoColors.danger
              ));
@@ -121,6 +233,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
         } else {
           // Booking might have been cancelled
           setState(() => _activeBooking = null);
+          _syncLocationUpdates();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Cuốc xe đã bị hủy hoặc không còn khả dụng.'), backgroundColor: DrivoColors.danger
           ));
@@ -179,7 +292,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: DrivoColors.primary.withOpacity(0.15),
+                    color: DrivoColors.primary.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Icon(Icons.local_taxi_rounded, color: DrivoColors.primary, size: 26),
@@ -191,14 +304,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 ])),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(color: DrivoColors.success.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+                  decoration: BoxDecoration(color: DrivoColors.success.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
                   child: Text(
                     '${(offer.estimatedPrice / 1000).toStringAsFixed(0)}K ₫',
                     style: GoogleFonts.inter(color: DrivoColors.success, fontWeight: FontWeight.w800, fontSize: 16),
                   ),
                 ),
               ]),
-              const SizedBox(height: 20),
+              const SizedBox(height: 14),
+
+              // Khoảng cách từ tài xế tới điểm đón (server tính theo vị trí GPS gần nhất)
+              if (offer.distanceToPickupKm != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: DrivoColors.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.electric_scooter_rounded, color: DrivoColors.accent, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(
+                      'Cách điểm đón ~${offer.distanceToPickupKm!.toStringAsFixed(1)} km '
+                      '(~${GeoUtils.scooterEtaMin(offer.distanceToPickupKm!)} phút bằng xe điện gấp)',
+                      style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+                    )),
+                  ]),
+                ),
+                const SizedBox(height: 14),
+              ],
 
               // Route info
               _OfferRouteRow(icon: Icons.circle, iconColor: DrivoColors.primary, label: 'Điểm đón', address: offer.pickupAddress),
@@ -223,9 +358,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: DrivoColors.warning.withOpacity(0.08),
+                    color: DrivoColors.warning.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+                    border: Border.all(color: DrivoColors.warning.withValues(alpha: 0.3)),
                   ),
                   child: Row(children: [
                     const Icon(Icons.notes_rounded, color: DrivoColors.warning, size: 16),
@@ -296,7 +431,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
     if (_togglingStatus) return;
     final newStatus = !_isOnline;
     setState(() => _togglingStatus = true);
-    final res = await ApiService.toggleDriverStatus(newStatus);
+    // Bật trực tuyến -> gửi kèm vị trí hiện tại để hệ thống ghép cuốc gần nhất.
+    double? lat, lng;
+    if (newStatus) {
+      final r = await LocationService.getCurrent(timeout: const Duration(seconds: 8));
+      if (r.ok) {
+        _lastPos = r.position;
+        lat = r.position!.latitude;
+        lng = r.position!.longitude;
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${r.error} Bạn vẫn trực tuyến nhưng có thể không nhận được cuốc gần.'),
+          backgroundColor: DrivoColors.warning,
+        ));
+      }
+    }
+    Map<String, dynamic> res;
+    try {
+      res = await ApiService.toggleDriverStatus(newStatus, latitude: lat, longitude: lng);
+    } catch (e) {
+      res = {'success': false, 'message': 'Lỗi kết nối: $e'};
+    }
     if (mounted) {
       setState(() {
         _togglingStatus = false;
@@ -309,6 +464,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           }
         }
       });
+      if (res['success'] == true && lat != null) {
+        _lastSentPos = _lastPos;
+        _lastSentAt = DateTime.now();
+      }
+      _syncLocationUpdates();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(res['message'] ?? (newStatus ? 'Đang trực tuyến' : 'Đã ngoại tuyến')),
         backgroundColor: newStatus ? DrivoColors.success : DrivoColors.textMuted,
@@ -329,11 +489,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
         if (updated.status == 'Completed') {
           setState(() => _activeBooking = null);
           _startPolling();
+          _syncLocationUpdates();
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('🎉 Hoàn thành chuyến! Đang tìm cuốc tiếp theo...'),
             backgroundColor: DrivoColors.success,
           ));
           _loadProfile(); // refresh earnings
+          _showCompletedSummary(updated);
         }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -369,6 +531,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
       if (res['success'] == true) {
         setState(() => _activeBooking = null);
         _startPolling();
+        _syncLocationUpdates();
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Đã hủy chuyến thành công'), backgroundColor: DrivoColors.success
         ));
@@ -395,7 +558,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           if (forced) ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(color: DrivoColors.warning.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(color: DrivoColors.warning.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
               child: Row(children: [
                 const Icon(Icons.warning_rounded, color: DrivoColors.warning, size: 14),
                 const SizedBox(width: 6),
@@ -428,6 +591,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
             child: Text('Hủy', style: TextStyle(color: DrivoColors.textMuted)),
           ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(96, 44)),
             onPressed: () async {
               if (newCtrl.text != confirmCtrl.text) {
                 setS(() => error = 'Mật khẩu xác nhận không khớp');
@@ -476,7 +640,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
       ),
       bottomNavigationBar: NavigationBar(
         backgroundColor: DrivoColors.bgCard,
-        indicatorColor: DrivoColors.primary.withOpacity(0.2),
+        indicatorColor: DrivoColors.primary.withValues(alpha: 0.2),
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: const [
@@ -567,9 +731,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: DrivoColors.warning.withOpacity(0.1),
+                color: DrivoColors.warning.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+                border: Border.all(color: DrivoColors.warning.withValues(alpha: 0.3)),
               ),
               child: Row(children: [
                 const Icon(Icons.hourglass_empty_rounded, color: DrivoColors.warning, size: 18),
@@ -609,7 +773,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                       decoration: BoxDecoration(
                         gradient: LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
                         shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: DrivoColors.primary.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 6))],
+                        boxShadow: [BoxShadow(color: DrivoColors.primary.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 6))],
                       ),
                       child: const Icon(Icons.local_taxi_rounded, color: Colors.white, size: 32),
                     ),
@@ -675,7 +839,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           Row(children: [
             Container(
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(12)),
               child: Icon(statusIcon, color: statusColor, size: 24),
             ),
             const SizedBox(width: 12),
@@ -685,7 +849,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
             ])),
             Text(b.bookingCode, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
           ]),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
+
+          // Bản đồ chuyến đi + nút chỉ đường
+          _buildTripMap(b),
+          const SizedBox(height: 16),
 
           // Route Card
           DrivoCard(
@@ -779,6 +947,268 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
     );
   }
 
+  // ── Bản đồ chuyến đi (tài xế) ───────────────────────────────
+  bool _isApproaching(String status) =>
+      status == 'DriverAccepted' || status == 'DriverArriving' || status == 'DriverAssigned';
+
+  /// Lấy lộ trình xe điện gấp từ vị trí tài xế tới điểm đón (1 lần mỗi chuyến).
+  Future<void> _loadApproachRoute() async {
+    final b = _activeBooking;
+    if (b == null || !_isApproaching(b.status) || !b.hasPickupCoords) return;
+    if (_approachForBookingId == b.id) return;
+    var me = _myLatLng;
+    if (me == null) {
+      final r = await LocationService.getCurrent(timeout: const Duration(seconds: 8));
+      if (!r.ok) return;
+      _lastPos ??= r.position;
+      me = LatLng(r.position!.latitude, r.position!.longitude);
+    }
+    _approachForBookingId = b.id;
+    final route = await ApiService.mapsRoute(
+      originLat: me.latitude,
+      originLng: me.longitude,
+      destLat: b.pickupLatitude!,
+      destLng: b.pickupLongitude!,
+      mode: 'TWO_WHEELER',
+    );
+    if (!mounted) return;
+    setState(() => _approachPolyline = route?.polyline);
+  }
+
+  void _fitTripMap(DriverBooking b, {bool force = false}) {
+    final key = '${b.id}:${b.status}:${_myLatLng != null}';
+    if (!force && _fittedKey == key) return;
+    final pts = <LatLng>[
+      ?_myLatLng,
+      if (b.hasPickupCoords && b.status != 'InProgress') LatLng(b.pickupLatitude!, b.pickupLongitude!),
+      if (b.hasDestinationCoords && (b.status == 'InProgress' || b.status == 'DriverArrived'))
+        LatLng(b.destinationLatitude!, b.destinationLongitude!),
+    ];
+    if (pts.isEmpty || _tripMapCtrl == null) return;
+    // Chỉ ghi nhớ khi fit thành công; map chưa layout xong thì lần build sau thử lại.
+    if (DrivoMap.fitPoints(_tripMapCtrl, pts, padding: 48)) _fittedKey = key;
+  }
+
+  Future<void> _openNavigation(DriverBooking b) async {
+    // Đang đến đón -> chỉ đường xe 2 bánh tới điểm đón; sau khi đón -> lái ô tô tới điểm đến.
+    final toPickup = _isApproaching(b.status);
+    double? lat, lng;
+    if (toPickup && b.hasPickupCoords) {
+      lat = b.pickupLatitude;
+      lng = b.pickupLongitude;
+    } else if (!toPickup && b.hasDestinationCoords) {
+      lat = b.destinationLatitude;
+      lng = b.destinationLongitude;
+    }
+    final dest = lat != null ? '$lat,$lng' : (toPickup ? b.pickupAddress : b.destinationAddress);
+    // Ưu tiên ứng dụng bản đồ trên máy (geo: URI), dự phòng: chỉ đường trên openstreetmap.org.
+    final geoUri = Uri.parse('geo:${lat != null ? dest : '0,0'}?q=${Uri.encodeComponent(dest)}');
+    final webUri = lat != null
+        ? Uri.https('www.openstreetmap.org', '/directions', {
+            'engine': toPickup ? 'fossgis_osrm_bike' : 'fossgis_osrm_car',
+            'route': ';$dest',
+          })
+        : Uri.https('www.openstreetmap.org', '/search', {'query': dest});
+    var ok = false;
+    try {
+      if (!kIsWeb) ok = await launchUrl(geoUri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    try {
+      if (!ok) ok = await launchUrl(webUri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Không mở được ứng dụng bản đồ')));
+    }
+  }
+
+  Widget _buildTripMap(DriverBooking b) {
+    final approaching = _isApproaching(b.status);
+    final markers = <MapMarker>[
+      if (_myLatLng != null)
+        MapMarker(
+          id: 'me',
+          position: _myLatLng!,
+          kind: MapMarkerKind.scooter,
+          title: 'Vị trí của bạn',
+        ),
+      if (b.hasPickupCoords)
+        MapMarker(
+          id: 'pickup',
+          position: LatLng(b.pickupLatitude!, b.pickupLongitude!),
+          kind: MapMarkerKind.pickup,
+          title: 'Điểm đón: ${b.pickupAddress}',
+        ),
+      if (b.hasDestinationCoords && !_isApproaching(b.status))
+        MapMarker(
+          id: 'destination',
+          position: LatLng(b.destinationLatitude!, b.destinationLongitude!),
+          kind: MapMarkerKind.destination,
+          title: 'Điểm đến: ${b.destinationAddress}',
+        ),
+    ];
+
+    final polylines = <MapLine>[];
+    if (_isApproaching(b.status)) {
+      var pts = _approachForBookingId == b.id ? GeoUtils.decodePolyline(_approachPolyline) : <LatLng>[];
+      if (pts.isEmpty && _myLatLng != null && b.hasPickupCoords) {
+        pts = [_myLatLng!, LatLng(b.pickupLatitude!, b.pickupLongitude!)];
+      }
+      // Tài xế đã ở ngay điểm đón -> không vẽ đường tới điểm đón.
+      if (pts.length >= 2 && GeoUtils.polylineKm(pts) >= 0.03) {
+        polylines.add(MapLine(
+          id: 'approach',
+          points: pts,
+          color: DrivoColors.accent,
+          width: 5,
+          dashed: true,
+        ));
+      }
+    } else {
+      var pts = GeoUtils.decodePolyline(b.routePolyline);
+      if (pts.isEmpty && b.hasPickupCoords && b.hasDestinationCoords) {
+        pts = [
+          LatLng(b.pickupLatitude!, b.pickupLongitude!),
+          LatLng(b.destinationLatitude!, b.destinationLongitude!),
+        ];
+      }
+      if (pts.length >= 2) {
+        polylines.add(MapLine(
+          id: 'route',
+          points: pts,
+          color: DrivoColors.primary,
+          width: 5,
+        ));
+      }
+    }
+
+    // Căn lại camera khi đổi trạng thái / lần đầu có GPS
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _activeBooking?.id == b.id) _fitTripMap(b);
+    });
+
+    final initial = _myLatLng ??
+        (b.hasPickupCoords ? LatLng(b.pickupLatitude!, b.pickupLongitude!) : const LatLng(21.0285, 105.8542));
+
+    double? kmToTarget;
+    if (_myLatLng != null) {
+      if (approaching && b.hasPickupCoords) {
+        kmToTarget = GeoUtils.roadKm(_myLatLng!, LatLng(b.pickupLatitude!, b.pickupLongitude!));
+      } else if (!approaching && b.hasDestinationCoords) {
+        kmToTarget = GeoUtils.roadKm(_myLatLng!, LatLng(b.destinationLatitude!, b.destinationLongitude!));
+      }
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          height: 240,
+          child: Stack(children: [
+            Positioned.fill(
+              child: DrivoMap(
+                initialTarget: initial,
+                initialZoom: 14,
+                markers: markers,
+                polylines: polylines,
+                onMapCreated: (c) {
+                  _tripMapCtrl = c;
+                  _fittedKey = null;
+                  _fitTripMap(b, force: true);
+                },
+              ),
+            ),
+            Positioned(
+              right: 10,
+              bottom: 10,
+              child: Material(
+                color: Colors.white,
+                shape: const CircleBorder(),
+                elevation: 3,
+                child: IconButton(
+                  icon: const Icon(Icons.center_focus_strong_rounded, color: Color(0xFF0070E0)),
+                  tooltip: 'Căn giữa',
+                  onPressed: () => _fitTripMap(b, force: true),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 10),
+      Row(children: [
+        Expanded(child: Text(
+          kmToTarget == null
+              ? (approaching ? 'Di chuyển tới điểm đón bằng xe điện gấp' : 'Lái xe của khách tới điểm đến')
+              : approaching
+                  ? 'Cách điểm đón ~${kmToTarget.toStringAsFixed(1)} km · ~${GeoUtils.scooterEtaMin(kmToTarget)} phút'
+                  : 'Còn ~${kmToTarget.toStringAsFixed(1)} km tới điểm đến',
+          style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w600),
+        )),
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          onPressed: () => _openNavigation(b),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: DrivoColors.accent,
+            // Theme mặc định minimumSize width = infinity -> nằm trong Row sẽ lỗi layout (vỡ cả màn hình).
+            minimumSize: const Size(0, 44),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          icon: const Icon(Icons.navigation_rounded, color: Colors.white, size: 18),
+          label: Text('Chỉ đường', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+        ),
+      ]),
+    ]);
+  }
+
+  /// Bảng phí sau khi hoàn thành chuyến.
+  void _showCompletedSummary(DriverBooking b) {
+    String money(double v) => '${v.toStringAsFixed(0).replaceAllMapped(
+      RegExp(r"(\d{1,3})(?=(\d{3})+(?!\d))"), (m) => "${m[1]}.")}đ';
+    Widget row(String label, String value, {bool bold = false, Color? color}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Flexible(child: Text(label, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 13,
+            fontWeight: bold ? FontWeight.w700 : FontWeight.normal))),
+        Text(value, style: GoogleFonts.inter(color: color ?? DrivoColors.textPrimary, fontSize: bold ? 17 : 13,
+            fontWeight: bold ? FontWeight.w800 : FontWeight.w600)),
+      ]),
+    );
+    final total = b.finalPrice ?? (b.estimatedPrice + b.pickupFee + b.waitingFee + b.extraDistanceFee - b.discount);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: DrivoColors.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          const Icon(Icons.check_circle_rounded, color: DrivoColors.success),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Chuyến ${b.bookingCode}', style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 17, fontWeight: FontWeight.w700))),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          row('Cước chuyến', money(b.estimatedPrice)),
+          if (b.pickupFee > 0)
+            row('Phí đón${b.pickupDistanceKm != null ? ' (${b.pickupDistanceKm!.toStringAsFixed(1)} km)' : ''}', money(b.pickupFee)),
+          if (b.waitingFee > 0) row('Phí chờ', money(b.waitingFee)),
+          if (b.extraDistanceFee > 0)
+            row('Phụ phí quãng đường${b.actualDistanceKm != null ? ' (${b.actualDistanceKm!.toStringAsFixed(1)} km)' : ''}',
+                money(b.extraDistanceFee)),
+          if (b.discount > 0) row('Giảm giá', '-${money(b.discount)}', color: DrivoColors.success),
+          const Divider(color: DrivoColors.border),
+          row('Khách thanh toán', money(total), bold: true, color: DrivoColors.success),
+        ]),
+        actions: [
+          // actions là một hàng ngang -> phải bỏ minimumSize width = infinity của theme.
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(96, 44)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildProgressSteps(String currentStatus) {
     final steps = [
       ('DriverAccepted', 'Đã nhận cuốc', Icons.check_circle),
@@ -809,7 +1239,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           if (isCurrent)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: DrivoColors.primary.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+              decoration: BoxDecoration(color: DrivoColors.primary.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
               child: Text('Hiện tại', style: GoogleFonts.inter(color: DrivoColors.primary, fontSize: 10, fontWeight: FontWeight.w600)),
             ),
         ]);
@@ -1008,7 +1438,7 @@ class _HistoryTile extends StatelessWidget {
         Row(children: [
           Container(
             width: 38, height: 38,
-            decoration: BoxDecoration(color: DrivoColors.success.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(color: DrivoColors.success.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
             child: const Icon(Icons.check_circle_rounded, color: DrivoColors.success, size: 20),
           ),
           const SizedBox(width: 12),
@@ -1090,7 +1520,7 @@ class _ProfileTabState extends State<_ProfileTab> {
             decoration: BoxDecoration(
               gradient: const LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
               shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: DrivoColors.primary.withOpacity(0.4), blurRadius: 20, offset: const Offset(0, 6))],
+              boxShadow: [BoxShadow(color: DrivoColors.primary.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 6))],
             ),
             child: Center(child: Text(p.fullName.split(' ').last[0],
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 32))),
@@ -1106,9 +1536,9 @@ class _ProfileTabState extends State<_ProfileTab> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: DrivoColors.warning.withOpacity(0.1),
+                color: DrivoColors.warning.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: DrivoColors.warning.withOpacity(0.3)),
+                border: Border.all(color: DrivoColors.warning.withValues(alpha: 0.3)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.lock_outline, color: DrivoColors.warning, size: 14),
@@ -1149,7 +1579,7 @@ class _ProfileTabState extends State<_ProfileTab> {
                   onPressed: () { _nameCtrl.text = p.fullName; _emailCtrl.text = p.email ?? ''; setState(() => _editing = true); },
                   icon: const Icon(Icons.edit_outlined, size: 16),
                   label: const Text('Chỉnh sửa thông tin'),
-                  style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.primary.withOpacity(0.15)),
+                  style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.primary.withValues(alpha: 0.15)),
                 )),
             ]),
           ])),

@@ -24,6 +24,9 @@ public interface IAdminDriverService
 
     /// <summary>Admin khóa / mở khóa tài khoản tài xế</summary>
     Task<BaseResponse<bool>> SetDriverAccountStatusAsync(int driverId, string status, int adminUserId);
+
+    /// <summary>Admin đặt lại mật khẩu cho tài xế</summary>
+    Task<BaseResponse<bool>> ResetDriverPasswordAsync(int driverId, string? newPassword, int adminUserId);
 }
 
 // ── Tài xế tự quản lý ─────────────────────────────────────

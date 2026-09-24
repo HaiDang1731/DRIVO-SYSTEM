@@ -20,6 +20,9 @@ dist/
 .env.local
 .env.*.local
 
+# Google Maps API key (đọc bởi run-api.ps1, run-mobile.ps1, drivo-admin/vite.config.ts)
+.google-maps-key
+
 # ═══════════════════════════════════════
 # Flutter / Dart (drivo-mobile)
 # ═══════════════════════════════════════

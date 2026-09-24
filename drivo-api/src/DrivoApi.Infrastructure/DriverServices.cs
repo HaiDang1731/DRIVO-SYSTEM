@@ -156,6 +156,13 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         var driver = await db.Drivers
             .Include(d => d.User)
             .Include(d => d.Documents)
+            .Include(d => d.StatusHistory)
+            .Include(d => d.Bookings)
+                .ThenInclude(b => b.Customer)
+                    .ThenInclude(c => c.User)
+            .Include(d => d.Ratings)
+                .ThenInclude(r => r.Customer)
+                    .ThenInclude(c => c.User)
             .FirstOrDefaultAsync(d => d.Id == driverId);
 
         if (driver == null)
@@ -163,6 +170,23 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
 
         return BaseResponse<DriverDetailResponse>.Ok(
             MapToDetail(driver, driver.User, driver.Documents.ToList()));
+    }
+
+    public async Task<BaseResponse<bool>> ResetDriverPasswordAsync(int driverId, string? newPassword, int adminUserId)
+    {
+        var driver = await db.Drivers
+            .Include(d => d.User)
+            .FirstOrDefaultAsync(d => d.Id == driverId);
+
+        if (driver == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy tài xế.");
+
+        var pwd = string.IsNullOrWhiteSpace(newPassword) ? driver.User.Phone : newPassword.Trim();
+        driver.User.PasswordHash = HashPassword(pwd);
+        driver.User.UpdatedAt = DateTime.UtcNow;
+
+        await db.SaveChangesAsync();
+        return BaseResponse<bool>.Ok(true, $"Đã đặt lại mật khẩu cho tài xế {driver.User.FullName}. Mật khẩu mới: {pwd}");
     }
 
     public async Task<BaseResponse<List<DriverListResponse>>> GetDriversAsync(

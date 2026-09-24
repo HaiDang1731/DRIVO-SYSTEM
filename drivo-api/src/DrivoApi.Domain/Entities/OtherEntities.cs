@@ -123,6 +123,10 @@ public class PricingRule
     public decimal PricePerMinute { get; set; }
     public decimal NightSurcharge { get; set; }
     public decimal WaitingPricePerMin { get; set; }
+    public decimal FreePickupKm { get; set; } = 3m;
+    public decimal PickupFeePerKm { get; set; } = 5000m;
+    public int FreeWaitingMin { get; set; } = 10;
+    public decimal OverDistanceTolerancePercent { get; set; } = 10m;
     public bool IsActive { get; set; } = true;
     public DateTime EffectiveFrom { get; set; }
     public DateTime? EffectiveTo { get; set; }

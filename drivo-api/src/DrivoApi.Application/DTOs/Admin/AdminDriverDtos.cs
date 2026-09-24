@@ -1,6 +1,6 @@
 namespace DrivoApi.Application.DTOs.Admin;
 
-// ── Admin tạo tài khoản tài xế ─────────────────────────────
+// ── Admin tạo tài khoản tài xế ──────────────────────────────
 public class CreateDriverRequest
 {
     public string FullName { get; set; } = null!;
@@ -12,7 +12,7 @@ public class CreateDriverRequest
     public string? InitialPassword { get; set; }
 }
 
-// ── Admin duyệt / từ chối tài xế ───────────────────────────
+// ── Admin duyệt / từ chối tài xế ────────────────────────────
 public class VerifyDriverRequest
 {
     /// <summary>APPROVED hoặc REJECTED</summary>
@@ -20,7 +20,7 @@ public class VerifyDriverRequest
     public string? RejectionReason { get; set; }
 }
 
-// ── Admin đăng ký giấy tờ cho tài xế ──────────────────────
+// ── Admin đăng ký giấy tờ cho tài xế ────────────────────────
 public class AddDriverDocumentRequest
 {
     /// <summary>CCCD | GPLX | DRIVER_LICENSE | VEHICLE_REGISTRATION | INSURANCE</summary>
@@ -28,7 +28,13 @@ public class AddDriverDocumentRequest
     public string FileUrl { get; set; } = null!;
 }
 
-// ── Response: thông tin tài xế đầy đủ ──────────────────────
+// ── Admin đặt lại mật khẩu cho tài xế ────────────────────────
+public class ResetDriverPasswordRequest
+{
+    public string? NewPassword { get; set; }
+}
+
+// ── Response: thông tin tài xế đầy đủ ───────────────────────
 public class DriverDetailResponse
 {
     public int DriverId { get; set; }
@@ -43,10 +49,49 @@ public class DriverDetailResponse
     public string DriverStatus { get; set; } = null!;
     public string AccountStatus { get; set; } = null!;
     public decimal RatingAverage { get; set; }
+    public int RatingCount { get; set; }
     public int TotalTrips { get; set; }
+    public decimal TotalEarnings { get; set; }
+    public decimal TotalDistanceKm { get; set; }
+    public DateTime? LastLoginAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public List<DriverDocumentDto> Documents { get; set; } = [];
+    public List<DriverStatusHistoryDto> StatusHistory { get; set; } = [];
+    public List<DriverTripSummaryDto> Trips { get; set; } = [];
+    public List<DriverRatingSummaryDto> Ratings { get; set; } = [];
+}
+
+public class DriverStatusHistoryDto
+{
+    public long Id { get; set; }
+    public string? OldStatus { get; set; }
+    public string NewStatus { get; set; } = null!;
+    public DateTime ChangedAt { get; set; }
+    public string? Reason { get; set; }
+}
+
+public class DriverTripSummaryDto
+{
+    public long Id { get; set; }
+    public string BookingCode { get; set; } = null!;
+    public string PickupAddress { get; set; } = null!;
+    public string DestinationAddress { get; set; } = null!;
+    public decimal? DistanceKm { get; set; }
+    public decimal Amount { get; set; }
+    public string Status { get; set; } = null!;
+    public string? CustomerName { get; set; }
+    public string? CustomerPhone { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class DriverRatingSummaryDto
+{
+    public long Id { get; set; }
+    public byte Score { get; set; }
+    public string? Comment { get; set; }
+    public string CustomerName { get; set; } = null!;
+    public DateTime CreatedAt { get; set; }
 }
 
 public class DriverDocumentDto
@@ -59,7 +104,7 @@ public class DriverDocumentDto
     public DateTime CreatedAt { get; set; }
 }
 
-// ── Danh sách tài xế phân trang ────────────────────────────
+// ── Danh sách tài xế phân trang ──────────────────────────────
 public class DriverListResponse
 {
     public int DriverId { get; set; }
