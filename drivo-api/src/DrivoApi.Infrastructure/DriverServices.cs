@@ -208,6 +208,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
                 LicenseExpiryDate = d.LicenseExpiryDate,
                 LicenseClass = d.LicenseClass,
                 Email = d.User.Email,
+                AvatarUrl = d.User.AvatarUrl,
                 PendingDocuments = d.Documents.Count(x => x.VerificationStatus == VerificationStatus.Pending),
                 CreatedAt = d.CreatedAt
             })
@@ -259,6 +260,14 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         doc.RejectionReason = status == VerificationStatus.Rejected ? req.RejectionReason!.Trim() : null;
         doc.VerifiedBy = adminUserId;
         doc.VerifiedAt = DateTime.UtcNow;
+
+        // Ảnh chân dung được duyệt -> dùng làm ảnh đại diện; bị từ chối -> gỡ nếu đang dùng
+        if (doc.DocumentType == DriverDocumentTypes.Portrait)
+        {
+            if (status == VerificationStatus.Approved) driver.User.AvatarUrl = doc.FileUrl;
+            else if (driver.User.AvatarUrl == doc.FileUrl) driver.User.AvatarUrl = null;
+            driver.User.UpdatedAt = DateTime.UtcNow;
+        }
         await db.SaveChangesAsync();
 
         return BaseResponse<DriverDetailResponse>.Ok(
@@ -461,7 +470,7 @@ public class DriverProfileService(DrivoDbContext db) : IDriverProfileService
             VerificationStatus = VerificationStatus.Pending,
             CreatedAt = now
         });
-        if (documentType == DriverDocumentTypes.Portrait) driver.User.AvatarUrl = fileUrl;
+        // Ảnh chân dung chỉ thành ảnh đại diện (khách hàng thấy) sau khi admin duyệt
         if (driver.VerificationStatus == VerificationStatus.Approved) driver.ProfileReviewPending = true;
         driver.ProfileUpdatedAt = now;
         driver.UpdatedAt = now;

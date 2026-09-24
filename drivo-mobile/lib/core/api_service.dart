@@ -195,6 +195,7 @@ class BookingDetail {
   final String vehicleInfo;
   final String? driverName;
   final String? driverPhone;
+  final String? driverAvatarUrl;
   final int? driverId;
   final String? customerNote;
   // Toạ độ & lộ trình
@@ -234,6 +235,7 @@ class BookingDetail {
     required this.vehicleInfo,
     this.driverName,
     this.driverPhone,
+    this.driverAvatarUrl,
     this.driverId,
     this.customerNote,
     this.pickupLatitude,
@@ -277,6 +279,7 @@ class BookingDetail {
       vehicleInfo: vInfo,
       driverName: d != null ? d['fullName'] : null,
       driverPhone: d != null ? d['phone'] : null,
+      driverAvatarUrl: d != null ? d['avatarUrl'] : null,
       driverId: d != null ? _toI(d['id']) : null,
       customerNote: j['customerNote'],
       pickupLatitude: _toD(j['pickupLatitude']),

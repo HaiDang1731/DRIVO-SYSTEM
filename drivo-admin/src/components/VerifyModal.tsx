@@ -23,7 +23,7 @@ export function VerifyModal({ driver, onClose, onDone }: { driver: any; onClose:
         </div>
         <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: 16, marginBottom: 20 }}>
           <div className="user-cell" style={{ marginBottom: 12 }}>
-            <Avatar name={driver.fullName} />
+            <Avatar name={driver.fullName} src={driver.avatarUrl} />
             <div>
               <div className="name">{driver.fullName}</div>
               <div className="phone">{driver.phone} • {driver.licenseNumber}</div>

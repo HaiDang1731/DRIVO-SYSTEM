@@ -125,6 +125,7 @@ public class DriverListResponse
     public DateOnly? LicenseExpiryDate { get; set; }
     public string? LicenseClass { get; set; }
     public string? Email { get; set; }
+    public string? AvatarUrl { get; set; }
     /// <summary>Số ảnh giấy tờ đang chờ duyệt.</summary>
     public int PendingDocuments { get; set; }
     public DateTime CreatedAt { get; set; }

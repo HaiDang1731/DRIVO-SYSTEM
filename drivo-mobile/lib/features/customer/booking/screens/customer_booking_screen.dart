@@ -1918,6 +1918,9 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                     CircleAvatar(
                       radius: 24,
                       backgroundColor: const Color(0xFF0070E0).withValues(alpha: 0.15),
+                      foregroundImage: b.driverAvatarUrl != null
+                          ? NetworkImage(ApiService.fileUrl(b.driverAvatarUrl!))
+                          : null,
                       child: const Icon(Icons.person_rounded, color: Color(0xFF0070E0), size: 28),
                     ),
                     const SizedBox(width: 12),

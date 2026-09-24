@@ -108,7 +108,7 @@ export function DriversPage() {
                   <tr key={d.driverId}>
                     <td>
                       <div className="user-cell">
-                        <Avatar name={d.fullName} />
+                        <Avatar name={d.fullName} src={d.avatarUrl} />
                         <div>
                           <div className="name">{d.fullName}</div>
                           <div className="phone">{d.email ?? '-'}</div>

@@ -676,6 +676,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
     );
   }
 
+  Widget _headerInitial() => Center(
+        child: Text(
+          (_profile?.fullName.trim().isNotEmpty ?? false) ? _profile!.fullName.trim().split(' ').last[0] : '?',
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+        ),
+      );
+
   Widget _buildHomeTab() {
     if (_loadingProfile) {
       return const Center(child: CircularProgressIndicator(color: DrivoColors.primary));
@@ -699,10 +706,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 gradient: const LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Center(child: Text(
-                _profile?.fullName.split(' ').last[0] ?? '?',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
-              )),
+              clipBehavior: Clip.antiAlias,
+              child: _profile?.avatarUrl != null
+                  ? Image.network(ApiService.fileUrl(_profile!.avatarUrl!), fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => _headerInitial())
+                  : _headerInitial(),
             ),
             const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
