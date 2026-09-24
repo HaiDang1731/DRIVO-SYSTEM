@@ -377,19 +377,76 @@ namespace DrivoApi.WebApi.Controllers
             return Ok(BaseResponse<object>.Ok(list));
         }
 
-        [HttpPost]
-        public async Task<IActionResult> CreateVoucher([FromBody] Voucher voucher)
+        private static string? ValidateVoucher(VoucherUpsertRequest r)
         {
-            voucher.Code = (voucher.Code ?? string.Empty).Trim().ToUpperInvariant();
-            if (voucher.Code.Length == 0)
-                return BadRequest(BaseResponse<object>.Fail("Vui lòng nhập mã voucher"));
-            if (await _db.Vouchers.AnyAsync(v => v.Code == voucher.Code))
+            if (string.IsNullOrWhiteSpace(r.Code)) return "Vui lòng nhập mã voucher";
+            if (r.Code.Trim().Length > 50) return "Mã voucher tối đa 50 ký tự";
+            if (string.IsNullOrWhiteSpace(r.Title)) return "Vui lòng nhập tên chương trình";
+            if (r.DiscountType is not ("PERCENT" or "FIXED")) return "Loại giảm giá không hợp lệ";
+            if (r.DiscountValue <= 0) return "Giá trị giảm phải lớn hơn 0";
+            if (r.DiscountType == "PERCENT" && r.DiscountValue > 100) return "Giảm theo % không được vượt quá 100%";
+            if (r.MaxDiscountAmount < 0 || r.MinOrderAmount < 0) return "Số tiền không được âm";
+            if (r.UsageLimit < 1) return "Số lượt phát hành phải từ 1 trở lên";
+            if (r.EndDate <= r.StartDate) return "Hạn sử dụng phải sau ngày bắt đầu";
+            return null;
+        }
+
+        private static void ApplyVoucher(Voucher v, VoucherUpsertRequest r)
+        {
+            v.Code = r.Code.Trim().ToUpperInvariant();
+            v.Title = r.Title.Trim();
+            v.Description = string.IsNullOrWhiteSpace(r.Description) ? null : r.Description.Trim();
+            v.DiscountType = r.DiscountType;
+            v.DiscountValue = r.DiscountValue;
+            // FIXED: mức giảm tối đa chính là số tiền giảm
+            v.MaxDiscountAmount = r.DiscountType == "FIXED" ? r.DiscountValue : (r.MaxDiscountAmount is > 0 ? r.MaxDiscountAmount : null);
+            v.MinOrderAmount = r.MinOrderAmount;
+            v.UsageLimit = r.UsageLimit;
+            v.IsActive = r.IsActive;
+            v.StartDate = r.StartDate.ToUniversalTime();
+            v.EndDate = r.EndDate.ToUniversalTime();
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> CreateVoucher([FromBody] VoucherUpsertRequest req)
+        {
+            var error = ValidateVoucher(req);
+            if (error != null) return BadRequest(BaseResponse<object>.Fail(error));
+            var code = req.Code.Trim().ToUpperInvariant();
+            if (await _db.Vouchers.AnyAsync(v => v.Code == code))
                 return BadRequest(BaseResponse<object>.Fail("Mã voucher đã tồn tại"));
 
-            voucher.CreatedAt = DateTime.UtcNow;
+            var voucher = new Voucher { CreatedAt = DateTime.UtcNow, UsedCount = 0 };
+            ApplyVoucher(voucher, req);
             _db.Vouchers.Add(voucher);
             await _db.SaveChangesAsync();
             return Ok(BaseResponse<object>.Ok(voucher, "Đã tạo mã giảm giá thành công"));
+        }
+
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateVoucher(int id, [FromBody] VoucherUpsertRequest req)
+        {
+            var voucher = await _db.Vouchers.FirstOrDefaultAsync(v => v.Id == id);
+            if (voucher == null) return NotFound(BaseResponse<object>.Fail("Không tìm thấy voucher"));
+
+            var error = ValidateVoucher(req);
+            if (error != null) return BadRequest(BaseResponse<object>.Fail(error));
+
+            var code = req.Code.Trim().ToUpperInvariant();
+            if (code != voucher.Code)
+            {
+                // Đổi mã khi đã có người dùng sẽ làm lệch lịch sử chuyến (Bookings.VoucherCode)
+                if (voucher.UsedCount > 0 || await _db.Bookings.AnyAsync(b => b.VoucherId == id))
+                    return BadRequest(BaseResponse<object>.Fail("Mã đã có người dùng, không thể đổi mã code. Hãy tạo mã mới."));
+                if (await _db.Vouchers.AnyAsync(v => v.Code == code && v.Id != id))
+                    return BadRequest(BaseResponse<object>.Fail("Mã voucher đã tồn tại"));
+            }
+            if (req.UsageLimit < voucher.UsedCount)
+                return BadRequest(BaseResponse<object>.Fail($"Số lượt phát hành không được nhỏ hơn số lượt đã dùng ({voucher.UsedCount})"));
+
+            ApplyVoucher(voucher, req);
+            await _db.SaveChangesAsync();
+            return Ok(BaseResponse<object>.Ok(voucher, "Đã cập nhật mã giảm giá"));
         }
 
         [HttpPatch("{id}/toggle")]
@@ -408,6 +465,8 @@ namespace DrivoApi.WebApi.Controllers
         {
             var voucher = await _db.Vouchers.FirstOrDefaultAsync(v => v.Id == id);
             if (voucher == null) return NotFound(BaseResponse<object>.Fail("Không tìm thấy voucher"));
+            if (await _db.Bookings.AnyAsync(b => b.VoucherId == id))
+                return BadRequest(BaseResponse<object>.Fail("Mã đã được dùng cho chuyến đi, không thể xóa. Hãy bấm Tắt để ngừng áp dụng."));
 
             _db.Vouchers.Remove(voucher);
             await _db.SaveChangesAsync();

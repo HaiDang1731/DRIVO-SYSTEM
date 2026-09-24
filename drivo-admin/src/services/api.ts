@@ -236,6 +236,7 @@ export const api = {
   // Admin Vouchers
   getVouchers: () => api.request('/admin/vouchers'),
   createVoucher: (data: any) => api.request('/admin/vouchers', { method: 'POST', body: JSON.stringify(data) }),
+  updateVoucher: (id: string | number, data: any) => api.request(`/admin/vouchers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   toggleVoucher: (id: string | number) => api.request(`/admin/vouchers/${id}/toggle`, { method: 'PATCH' }),
   deleteVoucher: (id: string | number) => api.request(`/admin/vouchers/${id}`, { method: 'DELETE' }),
 
