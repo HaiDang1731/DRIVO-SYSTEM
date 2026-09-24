@@ -132,7 +132,9 @@ export default function DriverDetailPage() {
               }}
             >
               <div style={{ textAlign: 'center', marginBottom: 20 }}>
-                <Avatar name={data.fullName} />
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <Avatar name={data.fullName} />
+                </div>
                 <h4 style={{ marginTop: 12, marginBottom: 4, color: 'var(--text-primary)', fontSize: 16 }}>{data.fullName}</h4>
                 <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 10 }}>{data.phone}</div>
                 <div style={{ display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
