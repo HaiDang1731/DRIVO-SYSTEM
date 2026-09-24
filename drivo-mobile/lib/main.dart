@@ -23,6 +23,12 @@ class DrivoApp extends StatelessWidget {
       title: 'DRIVO',
       debugShowCheckedModeBanner: false,
       theme: DrivoTheme.theme,
+      // Chạm vào vùng trống bất kỳ (kể cả trong bottom sheet/dialog) -> đóng bàn phím.
+      builder: (context, child) => GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+        child: child,
+      ),
       home: const _RootRouter(),
     );
   }
