@@ -22,6 +22,20 @@ public class EstimateFareResponse
     public decimal NightSurcharge { get; set; }
     public decimal TotalEstimatedFare { get; set; }
     public int? PricingRuleId { get; set; }
+
+    /// <summary>Encoded polyline (precision 5) của chặng chính từ OSRM (null nếu dùng ước tính)</summary>
+    public string? RoutePolyline { get; set; }
+
+    // Xem trước chặng đón (tài xế Online gần nhất, vị trí trong 10 phút) — null nếu không có tài xế
+    public decimal? EstimatedPickupKm { get; set; }
+    public decimal? EstimatedPickupFee { get; set; }
+    public int? NearestDriverEtaMin { get; set; }
+
+    // Tham số phí từ bảng giá áp dụng
+    public decimal FreePickupKm { get; set; }
+    public decimal PickupFeePerKm { get; set; }
+    public decimal WaitingPricePerMin { get; set; }
+    public int FreeWaitingMin { get; set; }
 }
 
 public class CreateBookingRequest
@@ -34,6 +48,34 @@ public class CreateBookingRequest
     public decimal DestinationLatitude { get; set; }
     public decimal DestinationLongitude { get; set; }
     public string? CustomerNote { get; set; }
+    public PaymentMethod PaymentMethod { get; set; } = PaymentMethod.Cash;
+    public string? VoucherCode { get; set; }
+}
+
+public class VoucherResponse
+{
+    public string Code { get; set; } = null!;
+    public string Title { get; set; } = null!;
+    public string? Description { get; set; }
+    public string DiscountType { get; set; } = null!;
+    public decimal DiscountValue { get; set; }
+    public decimal? MaxDiscountAmount { get; set; }
+    public decimal MinOrderAmount { get; set; }
+    public DateTime EndDate { get; set; }
+}
+
+public class CheckVoucherRequest
+{
+    public string Code { get; set; } = null!;
+    /// <summary>Giá ước tính của chuyến (trước giảm giá).</summary>
+    public decimal OrderAmount { get; set; }
+}
+
+public class CheckVoucherResponse
+{
+    public string Code { get; set; } = null!;
+    public string Title { get; set; } = null!;
+    public decimal Discount { get; set; }
 }
 
 public class CancelBookingRequest
@@ -80,6 +122,104 @@ public class BookingDetailResponse
     public string? CustomerNote { get; set; }
     public DateTime CreatedAt { get; set; }
 
+    public decimal TimeFare { get; set; }
+    public string? RoutePolyline { get; set; }
+    public decimal? PickupDistanceKm { get; set; }
+    public decimal PickupFee { get; set; }
+    public decimal WaitingFee { get; set; }
+    public decimal ExtraDistanceFee { get; set; }
+    public decimal Discount { get; set; }
+    public decimal? ActualDistanceKm { get; set; }
+    /// <summary>Phần nền tảng DRIVO giữ lại trên FinalPrice (chỉ có giá trị sau khi hoàn thành chuyến).</summary>
+    public decimal CommissionAmount { get; set; }
+    /// <summary>Thu nhập thực nhận của tài xế = FinalPrice - CommissionAmount.</summary>
+    public decimal DriverPayout { get; set; }
+    public string PaymentMethod { get; set; } = "Cash";
+    public string? VoucherCode { get; set; }
+    public DateTime? AcceptedAt { get; set; }
+    public DateTime? ArrivedAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+
+    // Vị trí hiện tại của tài xế (chỉ khi đã có tài xế nhận)
+    public decimal? DriverLatitude { get; set; }
+    public decimal? DriverLongitude { get; set; }
+    public DateTime? DriverLastLocationAt { get; set; }
+
+    /// <summary>Chỉ có trong danh sách cuốc chờ của tài xế: khoảng cách (km) từ tài xế tới điểm đón</summary>
+    public decimal? DistanceToPickupKm { get; set; }
+
+    /// <summary>Cuốc chờ đang được ưu tiên riêng cho tài xế này: số giây còn lại để nhận (null = đang mở cho mọi tài xế).</summary>
+    public int? OfferSecondsLeft { get; set; }
+
+    /// <summary>Tên khách (tài xế thấy cả khi chưa nhận cuốc).</summary>
+    public string? CustomerName { get; set; }
+    /// <summary>SĐT khách: chỉ trả cho tài xế đã nhận cuốc.</summary>
+    public string? CustomerPhone { get; set; }
+
     public BookingVehicleSummaryDto Vehicle { get; set; } = null!;
     public BookingDriverSummaryDto? Driver { get; set; }
+}
+
+// ── Admin: chi tiết cuốc xe kèm lộ trình GPS ─────────────────
+public class AdminBookingCustomerDto
+{
+    public int Id { get; set; }
+    public string FullName { get; set; } = null!;
+    public string Phone { get; set; } = null!;
+}
+
+public class TrailPointDto
+{
+    public decimal Latitude { get; set; }
+    public decimal Longitude { get; set; }
+    public DateTime RecordedAt { get; set; }
+}
+
+public class BookingStatusHistoryDto
+{
+    public string Status { get; set; } = null!;
+    public string? OldStatus { get; set; }
+    public DateTime ChangedAt { get; set; }
+    public string? Note { get; set; }
+}
+
+public class PricingRuleSnapshotDto
+{
+    public int Id { get; set; }
+    public string VehicleType { get; set; } = null!;
+    public decimal BaseFare { get; set; }
+    public decimal PricePerKm { get; set; }
+    public decimal PricePerMinute { get; set; }
+    public decimal NightSurcharge { get; set; }
+    public decimal WaitingPricePerMin { get; set; }
+    public decimal FreePickupKm { get; set; }
+    public decimal PickupFeePerKm { get; set; }
+    public int FreeWaitingMin { get; set; }
+    public decimal OverDistanceTolerancePercent { get; set; }
+}
+
+public class BookingOfferDto
+{
+    public int DriverId { get; set; }
+    public string DriverName { get; set; } = null!;
+    public int Round { get; set; }
+    public decimal? DistanceToPickupKm { get; set; }
+    /// <summary>Sent | Accepted | Rejected | Expired | Cancelled</summary>
+    public string Status { get; set; } = null!;
+    public DateTime SentAt { get; set; }
+    public DateTime? RespondedAt { get; set; }
+}
+
+public class AdminBookingDetailResponse : BookingDetailResponse
+{
+    /// <summary>Lịch sử gửi cuốc lần lượt cho từng tài xế.</summary>
+    public List<BookingOfferDto> Offers { get; set; } = [];
+    public AdminBookingCustomerDto Customer { get; set; } = null!;
+    public string? CancelledBy { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public List<TrailPointDto> Trail { get; set; } = [];
+    public List<BookingStatusHistoryDto> StatusHistory { get; set; } = [];
+    public PricingRuleSnapshotDto? PricingRule { get; set; }
 }

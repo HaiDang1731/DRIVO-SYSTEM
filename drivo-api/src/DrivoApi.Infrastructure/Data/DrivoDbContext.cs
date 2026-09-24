@@ -26,6 +26,7 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
     public DbSet<PricingRule> PricingRules => Set<PricingRule>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<Voucher> Vouchers => Set<Voucher>();
 
     public static string ToSnakeUpper(string val) =>
         string.Concat(val.Select((x, i) => i > 0 && char.IsUpper(x) ? "_" + x : x.ToString())).ToUpperInvariant();
@@ -89,6 +90,11 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             .Property(d => d.DriverStatus)
             .HasConversion<string>();
 
+        // CK_DriverDocuments_Status: 'PENDING' | 'APPROVED' | 'REJECTED' (mặc định EF lưu số -> bị DB từ chối)
+        modelBuilder.Entity<DriverDocument>()
+            .Property(d => d.VerificationStatus)
+            .HasConversion(v => v.ToString().ToUpperInvariant(), v => Enum.Parse<VerificationStatus>(v, true));
+
         modelBuilder.Entity<Booking>()
             .Property(b => b.Status)
             .HasConversion(
@@ -112,21 +118,75 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             .Property(cv => cv.Transmission)
             .HasConversion<string>();
 
+        // CK_Payments_* yêu cầu 'CASH' | 'MOCK_BANKING' | 'SUCCESS'... (snake upper)
         modelBuilder.Entity<Payment>()
             .Property(p => p.PaymentStatus)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentStatus>(v));
 
         modelBuilder.Entity<Payment>()
             .Property(p => p.PaymentMethod)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentMethod>(v));
+
+        modelBuilder.Entity<Booking>()
+            .Property(b => b.PaymentMethod)
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentMethod>(v));
 
         modelBuilder.Entity<PricingRule>()
             .Property(pr => pr.VehicleType)
             .HasConversion<string>();
 
+        // CK_BookingDriverOffers_Status: 'SENT' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED'
         modelBuilder.Entity<BookingDriverOffer>()
             .Property(o => o.OfferStatus)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<OfferStatus>(v));
+
+        modelBuilder.Entity<BookingDriverOffer>(e =>
+        {
+            e.Property(o => o.DistanceToPickupKm).HasPrecision(10, 2);
+        });
+
+        // Decimal precision (match SQL schema; default decimal(18,2) would truncate coordinates)
+        modelBuilder.Entity<Driver>(e =>
+        {
+            e.Property(d => d.CurrentLatitude).HasPrecision(10, 7);
+            e.Property(d => d.CurrentLongitude).HasPrecision(10, 7);
+        });
+
+        modelBuilder.Entity<DriverLocationHistory>(e =>
+        {
+            e.Property(h => h.Latitude).HasPrecision(10, 7);
+            e.Property(h => h.Longitude).HasPrecision(10, 7);
+            e.Property(h => h.AccuracyMeters).HasPrecision(8, 2);
+            e.Property(h => h.SpeedKmh).HasPrecision(8, 2);
+            e.Property(h => h.Heading).HasPrecision(6, 2);
+        });
+
+        modelBuilder.Entity<Booking>(e =>
+        {
+            e.Property(b => b.PickupLatitude).HasPrecision(10, 7);
+            e.Property(b => b.PickupLongitude).HasPrecision(10, 7);
+            e.Property(b => b.DestinationLatitude).HasPrecision(10, 7);
+            e.Property(b => b.DestinationLongitude).HasPrecision(10, 7);
+            e.Property(b => b.EstimatedDistanceKm).HasPrecision(10, 2);
+            e.Property(b => b.PickupDistanceKm).HasPrecision(8, 2);
+            e.Property(b => b.ActualDistanceKm).HasPrecision(8, 2);
+        });
+
+        modelBuilder.Entity<Trip>(e =>
+        {
+            e.Property(t => t.StartLatitude).HasPrecision(10, 7);
+            e.Property(t => t.StartLongitude).HasPrecision(10, 7);
+            e.Property(t => t.EndLatitude).HasPrecision(10, 7);
+            e.Property(t => t.EndLongitude).HasPrecision(10, 7);
+            e.Property(t => t.ActualDistanceKm).HasPrecision(10, 2);
+        });
+
+        modelBuilder.Entity<PricingRule>(e =>
+        {
+            e.Property(p => p.FreePickupKm).HasPrecision(6, 2);
+            e.Property(p => p.OverDistanceTolerancePercent).HasPrecision(5, 2);
+            e.Property(p => p.CommissionPercent).HasPrecision(5, 2);
+        });
 
         // Table name mappings (matching exact database tables)
         modelBuilder.Entity<BookingStatusHistory>().ToTable("BookingStatusHistory");

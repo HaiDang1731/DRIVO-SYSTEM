@@ -54,6 +54,18 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     );
 
     _checkActiveBooking();
+    _loadVouchers();
+  }
+
+  List<VoucherInfo> _vouchers = [];
+
+  Future<void> _loadVouchers() async {
+    try {
+      final res = await ApiService.getAvailableVouchers();
+      if (res['success'] == true && res['data'] is List && mounted) {
+        setState(() => _vouchers = (res['data'] as List).map((x) => VoucherInfo.fromJson(x)).toList());
+      }
+    } catch (_) {}
   }
 
   @override
@@ -66,19 +78,21 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   Future<void> _checkActiveBooking() async {
     try {
       final res = await ApiService.getActiveBooking();
-      if (res['success'] == true && res['data'] != null) {
-        if (mounted) setState(() => _activeBooking = BookingDetail.fromJson(res['data']));
+      if (res['success'] == true && mounted) {
+        // data null = không còn chuyến đang chạy (vừa hoàn thành/hủy) -> bỏ thẻ chuyến cũ ở Home
+        setState(() => _activeBooking = res['data'] != null ? BookingDetail.fromJson(res['data']) : null);
       }
     } catch (_) {}
   }
 
-  void _openBooking() {
+  void _openBooking({String? voucherCode}) {
     HapticFeedback.mediumImpact();
     Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (_, animation, __) => CustomerBookingScreen(
           user: widget.user,
           initialActiveBooking: _activeBooking,
+          initialVoucherCode: voucherCode,
         ),
         transitionsBuilder: (_, animation, __, child) {
           return SlideTransition(
@@ -91,8 +105,13 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
         },
         transitionDuration: const Duration(milliseconds: 400),
       ),
-    ).then((_) => _checkActiveBooking());
+    ).then((_) {
+      _checkActiveBooking();
+      _loadVouchers(); // mã vừa dùng sẽ biến khỏi danh sách
+    });
   }
+
+  void _useVoucher(String code) => _openBooking(voucherCode: code);
 
   @override
   Widget build(BuildContext context) {
@@ -109,6 +128,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
             user: widget.user,
             activeBooking: _activeBooking,
             onOpenBooking: _openBooking,
+            vouchers: _vouchers,
+            onUseVoucher: _useVoucher,
             pulseAnim: _pulseAnim ?? const AlwaysStoppedAnimation(1.0),
             floatAnim: _floatAnim ?? const AlwaysStoppedAnimation(0.0),
           ),
@@ -214,10 +235,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   }
 
   void _showGiftModal() {
+    _loadVouchers();
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _GiftModalSheet(onOpenBooking: _openBooking),
+      builder: (ctx) => _GiftModalSheet(vouchersFuture: ApiService.getAvailableVouchers(), onUseVoucher: _useVoucher),
     );
   }
 }
@@ -229,6 +252,8 @@ class _HomeTabView extends StatelessWidget {
   final AuthUser user;
   final BookingDetail? activeBooking;
   final VoidCallback onOpenBooking;
+  final List<VoucherInfo> vouchers;
+  final void Function(String code) onUseVoucher;
   final Animation<double> pulseAnim;
   final Animation<double> floatAnim;
 
@@ -236,6 +261,8 @@ class _HomeTabView extends StatelessWidget {
     required this.user,
     required this.activeBooking,
     required this.onOpenBooking,
+    required this.vouchers,
+    required this.onUseVoucher,
     required this.pulseAnim,
     required this.floatAnim,
   });
@@ -272,8 +299,10 @@ class _HomeTabView extends StatelessWidget {
               const SizedBox(height: 14),
               _buildLinkedGrid(context),
 
-              const SizedBox(height: 28),
-              _buildPromoCard(context),
+              if (vouchers.isNotEmpty) ...[
+                const SizedBox(height: 28),
+                _buildPromoCard(context, vouchers.first),
+              ],
             ]),
           ),
         ),
@@ -821,7 +850,7 @@ class _HomeTabView extends StatelessWidget {
   }
 
   // ── Promo Card ─────────────────────────────────────────
-  Widget _buildPromoCard(BuildContext context) {
+  Widget _buildPromoCard(BuildContext context, VoucherInfo v) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -853,12 +882,14 @@ class _HomeTabView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'DRIVO10K - Giảm 10.000đ',
+                  '${v.code} - ${v.title}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.inter(fontWeight: FontWeight.w700, fontSize: 14, color: Colors.white),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Áp dụng cho chuyến lái hộ đầu tiên của bạn',
+                  v.summary,
                   style: GoogleFonts.inter(fontSize: 12, color: Colors.white54),
                 ),
               ],
@@ -866,7 +897,7 @@ class _HomeTabView extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: onOpenBooking,
+            onTap: () => onUseVoucher(v.code),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -905,12 +936,16 @@ class _ServiceItem {
 // GIFT MODAL SHEET
 // ─────────────────────────────────────────────────────────
 class _GiftModalSheet extends StatelessWidget {
-  final VoidCallback onOpenBooking;
-  const _GiftModalSheet({required this.onOpenBooking});
+  final Future<Map<String, dynamic>> vouchersFuture;
+  final void Function(String code) onUseVoucher;
+  const _GiftModalSheet({required this.vouchersFuture, required this.onUseVoucher});
+
+  static const _colors = [Color(0xFF6C63FF), Color(0xFF3B82F6), Color(0xFF06B6D4), Color(0xFF10B981)];
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       decoration: const BoxDecoration(
         color: Color(0xFF0E1228),
@@ -937,15 +972,42 @@ class _GiftModalSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          _buildVoucherItem(context, 'DRIVO10K', 'Giảm 10.000đ cho chuyến lái hộ đầu tiên', const Color(0xFF6C63FF), onOpenBooking),
-          const SizedBox(height: 12),
-          _buildVoucherItem(context, 'HELLO2026', 'Giảm 20.000đ dành cho khách hàng mới', const Color(0xFF3B82F6), onOpenBooking),
+          Flexible(
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: vouchersFuture,
+              builder: (context, snap) {
+                if (snap.connectionState != ConnectionState.done) {
+                  return const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF), strokeWidth: 2)),
+                  );
+                }
+                final res = snap.data;
+                if (snap.hasError || res == null || res['success'] != true) {
+                  return _message('Không tải được danh sách ưu đãi, vui lòng thử lại.');
+                }
+                final list = ((res['data'] as List?) ?? []).map((x) => VoucherInfo.fromJson(x)).toList();
+                if (list.isEmpty) return _message('Hiện chưa có mã khuyến mãi nào dành cho bạn.');
+                return ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: list.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 12),
+                  itemBuilder: (_, i) => _buildVoucherItem(context, list[i], _colors[i % _colors.length]),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildVoucherItem(BuildContext ctx, String code, String desc, Color color, VoidCallback onTap) {
+  Widget _message(String text) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(text, textAlign: TextAlign.center, style: GoogleFonts.inter(fontSize: 13, color: Colors.white54)),
+      );
+
+  Widget _buildVoucherItem(BuildContext ctx, VoucherInfo v, Color color) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -969,16 +1031,19 @@ class _GiftModalSheet extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(code, style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white)),
+                Text(v.code, style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 14, color: Colors.white)),
                 const SizedBox(height: 2),
-                Text(desc, style: GoogleFonts.inter(fontSize: 11.5, color: Colors.white54)),
+                Text(v.title, style: GoogleFonts.inter(fontSize: 12, color: Colors.white70)),
+                const SizedBox(height: 2),
+                Text(v.summary, style: GoogleFonts.inter(fontSize: 11, color: Colors.white54)),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           GestureDetector(
             onTap: () {
               Navigator.pop(ctx);
-              onTap();
+              onUseVoucher(v.code);
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -1134,9 +1199,16 @@ class _ActivityTabViewState extends State<_ActivityTabView> {
                           _tripRow(Icons.location_on_rounded, b.destinationAddress, const Color(0xFFEF4444)),
                           const SizedBox(height: 12),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(b.vehicleInfo, style: GoogleFonts.inter(fontSize: 12, color: Colors.white54), overflow: TextOverflow.ellipsis),
+                              Expanded(
+                                child: Text(
+                                  b.vehicleInfo,
+                                  style: GoogleFonts.inter(fontSize: 12, color: Colors.white54),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
                               Text(
                                 '${(price / 1000).toStringAsFixed(0)}K ₫',
                                 style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 15, color: Colors.white),

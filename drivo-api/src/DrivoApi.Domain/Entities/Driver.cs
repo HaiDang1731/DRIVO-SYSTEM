@@ -17,6 +17,32 @@ public class Driver
     public decimal? CurrentLatitude { get; set; }
     public decimal? CurrentLongitude { get; set; }
     public DateTime? LastLocationAt { get; set; }
+
+    // Cá nhân + CCCD
+    public DateOnly? DateOfBirth { get; set; }
+    /// <summary>MALE | FEMALE | OTHER</summary>
+    public string? Gender { get; set; }
+    public string? Address { get; set; }
+    public string? IdCardNumber { get; set; }
+
+    // GPLX
+    public DateOnly? LicenseExpiryDate { get; set; }
+    public int? DrivingExperienceYears { get; set; }
+
+    // Liên hệ khẩn cấp
+    public string? EmergencyContactName { get; set; }
+    public string? EmergencyContactPhone { get; set; }
+    public string? EmergencyContactRelation { get; set; }
+
+    // Tài khoản nhận tiền
+    public string? BankName { get; set; }
+    public string? BankAccountNumber { get; set; }
+    public string? BankAccountHolder { get; set; }
+
+    /// <summary>Tài xế đã duyệt sửa thông tin quan trọng / tải giấy tờ mới -> admin cần xem lại.</summary>
+    public bool ProfileReviewPending { get; set; }
+    public DateTime? ProfileUpdatedAt { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 

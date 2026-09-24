@@ -36,6 +36,55 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    private static readonly Dictionary<string, string> AllowedImageTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["image/jpeg"] = ".jpg",
+        ["image/png"] = ".png",
+        ["image/webp"] = ".webp",
+    };
+    private const long MaxDocumentBytes = 5 * 1024 * 1024;
+
+    /// <summary>Tải ảnh giấy tờ: DRIVER_LICENSE_FRONT | DRIVER_LICENSE_BACK | CCCD_FRONT | CCCD_BACK | PROFILE_PHOTO</summary>
+    [HttpPost("documents")]
+    [RequestSizeLimit(MaxDocumentBytes + 64 * 1024)]
+    public async Task<IActionResult> UploadDocument([FromForm] string documentType, IFormFile? file,
+        [FromServices] IWebHostEnvironment env)
+    {
+        documentType = (documentType ?? string.Empty).Trim().ToUpperInvariant();
+        if (!DriverDocumentTypes.Required.Contains(documentType))
+            return BadRequest(DrivoApi.Application.DTOs.Common.BaseResponse<object>.Fail("Loại giấy tờ không hợp lệ."));
+        if (file == null || file.Length == 0)
+            return BadRequest(DrivoApi.Application.DTOs.Common.BaseResponse<object>.Fail("Vui lòng chọn ảnh."));
+        if (file.Length > MaxDocumentBytes)
+            return BadRequest(DrivoApi.Application.DTOs.Common.BaseResponse<object>.Fail("Ảnh tối đa 5 MB."));
+        if (!AllowedImageTypes.TryGetValue(file.ContentType ?? string.Empty, out var ext) || !await LooksLikeImageAsync(file))
+            return BadRequest(DrivoApi.Application.DTOs.Common.BaseResponse<object>.Fail("Chỉ nhận ảnh JPG, PNG hoặc WEBP."));
+
+        // Tên file ngẫu nhiên, không dùng tên client gửi lên
+        var webRoot = env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot");
+        var dir = Path.Combine(webRoot, "uploads", "drivers", CurrentUserId.ToString());
+        Directory.CreateDirectory(dir);
+        var fileName = $"{documentType.ToLowerInvariant()}-{Guid.NewGuid():N}{ext}";
+        await using (var fs = System.IO.File.Create(Path.Combine(dir, fileName)))
+            await file.CopyToAsync(fs);
+
+        var url = $"/uploads/drivers/{CurrentUserId}/{fileName}";
+        var result = await driverProfileService.UploadDocumentAsync(CurrentUserId, documentType, url);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Kiểm tra chữ ký đầu file (JPEG / PNG / WEBP), không tin Content-Type client gửi.</summary>
+    private static async Task<bool> LooksLikeImageAsync(IFormFile file)
+    {
+        var head = new byte[12];
+        await using var s = file.OpenReadStream();
+        var n = await s.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
+        if (n >= 3 && head[0] == 0xFF && head[1] == 0xD8 && head[2] == 0xFF) return true;
+        if (n >= 8 && head[0] == 0x89 && head[1] == 0x50 && head[2] == 0x4E && head[3] == 0x47) return true;
+        return n >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
+                       && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P';
+    }
+
     /// <summary>Đổi mật khẩu</summary>
     [HttpPost("change-password")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
@@ -50,7 +99,15 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
     [HttpPost("toggle-status")]
     public async Task<IActionResult> ToggleStatus([FromBody] ToggleDriverStatusRequest request)
     {
-        var result = await bookingService.ToggleDriverStatusAsync(CurrentUserId, request.IsOnline);
+        var result = await bookingService.ToggleDriverStatusAsync(CurrentUserId, request.IsOnline, request.Latitude, request.Longitude);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Cập nhật vị trí GPS hiện tại (gọi định kỳ khi trực tuyến / đang chạy cuốc)</summary>
+    [HttpPost("location")]
+    public async Task<IActionResult> UpdateLocation([FromBody] DrivoApi.Application.DTOs.Tracking.UpdateDriverLocationRequest request)
+    {
+        var result = await bookingService.UpdateDriverLocationAsync(CurrentUserId, request);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
@@ -69,6 +126,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
     public async Task<IActionResult> AcceptBooking(long id)
     {
         var result = await bookingService.AcceptBookingAsync(id, CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Tài xế bỏ qua cuốc đang được gửi cho mình -> chuyển ngay cho tài xế tiếp theo</summary>
+    [HttpPost("bookings/{id:long}/reject")]
+    public async Task<IActionResult> RejectBooking(long id)
+    {
+        var result = await bookingService.RejectBookingAsync(id, CurrentUserId);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
@@ -94,6 +159,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
     {
         var result = await bookingService.GetDriverActiveBookingAsync(CurrentUserId);
         return Ok(result);
+    }
+
+    /// <summary>Thu nhập theo kỳ (day | week | month) chứa ngày date (yyyy-MM-dd, giờ VN; mặc định hôm nay)</summary>
+    [HttpGet("earnings")]
+    public async Task<IActionResult> GetEarnings([FromQuery] string period = "day", [FromQuery] DateTime? date = null)
+    {
+        var result = await bookingService.GetDriverEarningsAsync(CurrentUserId, period, date);
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     /// <summary>Lịch sử chuyến đi đã hoàn thành</summary>

@@ -123,6 +123,12 @@ public class PricingRule
     public decimal PricePerMinute { get; set; }
     public decimal NightSurcharge { get; set; }
     public decimal WaitingPricePerMin { get; set; }
+    public decimal FreePickupKm { get; set; } = 3m;
+    public decimal PickupFeePerKm { get; set; } = 5000m;
+    public int FreeWaitingMin { get; set; } = 10;
+    public decimal OverDistanceTolerancePercent { get; set; } = 10m;
+    /// <summary>% nền tảng DRIVO giữ lại trên giá cuối cùng của chuyến (còn lại là thu nhập tài xế).</summary>
+    public decimal CommissionPercent { get; set; } = 15m;
     public bool IsActive { get; set; } = true;
     public DateTime EffectiveFrom { get; set; }
     public DateTime? EffectiveTo { get; set; }

@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using DrivoApi.Application.Settings;
 using DrivoApi.Infrastructure;
 using DrivoApi.Infrastructure.Data;
+using DrivoApi.WebApi.Hubs;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -76,10 +77,19 @@ builder.Services.AddSwaggerGen();
 
 // Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IAdminDashboardService, AdminDashboardService>();
 builder.Services.AddScoped<IAdminDriverService, AdminDriverService>();
 builder.Services.AddScoped<IDriverProfileService, DriverProfileService>();
 builder.Services.AddScoped<ICustomerVehicleService, CustomerVehicleService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
+
+// Bản đồ OpenStreetMap miễn phí (Photon / Nominatim / OSRM) — không cần API key. Cấu hình tùy chọn: "Maps".
+builder.Services.Configure<MapsSettings>(builder.Configuration.GetSection("Maps"));
+builder.Services.AddMemoryCache();
+builder.Services.AddHttpClient<IMapsService, OsmMapsService>(client => client.Timeout = TimeSpan.FromSeconds(5));
+
+// Realtime tracking (SignalR) — Infrastructure phát sự kiện qua ITrackingNotifier
+builder.Services.AddSingleton<ITrackingNotifier, SignalRTrackingNotifier>();
 // TODO Nguyen Nhat: builder.Services.AddScoped<IBookingService, BookingService>();
 // TODO Nguyen Nhat: builder.Services.AddScoped<IPaymentService, PaymentService>();
 
@@ -92,12 +102,22 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("DrivoCors");
+
+// Ảnh giấy tờ / chân dung tài xế: wwwroot/uploads/... (tên file ngẫu nhiên, không liệt kê thư mục)
+var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+Directory.CreateDirectory(Path.Combine(webRoot, "uploads"));
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(webRoot),
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.Append("Access-Control-Allow-Origin", "*")
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
 // SignalR Hubs
-// app.MapHub<TrackingHub>("/hubs/tracking");
+app.MapHub<TrackingHub>("/hubs/tracking");
 
 app.Run();
 

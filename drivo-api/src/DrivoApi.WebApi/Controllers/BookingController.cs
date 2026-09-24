@@ -58,6 +58,15 @@ public class BookingController(IBookingService bookingService) : ControllerBase
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    /// <summary>Khách chờ lâu bấm "Làm mới": tìm tài xế lại từ đầu</summary>
+    [HttpPost("{id:long}/retry-search")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> RetrySearch(long id)
+    {
+        var result = await bookingService.RetrySearchAsync(id, CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Lịch sử chuyến đi của khách</summary>
     [HttpGet("customer-history")]
     [Authorize(Roles = "CUSTOMER")]
@@ -65,6 +74,24 @@ public class BookingController(IBookingService bookingService) : ControllerBase
     {
         var result = await bookingService.GetCustomerBookingsAsync(CurrentUserId, page, pageSize);
         return Ok(result);
+    }
+
+    /// <summary>Danh sách mã khuyến mãi khách còn dùng được</summary>
+    [HttpGet("vouchers")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> GetVouchers()
+    {
+        var result = await bookingService.GetAvailableVouchersAsync(CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>Kiểm tra mã khuyến mãi và số tiền được giảm cho giá ước tính</summary>
+    [HttpPost("vouchers/check")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> CheckVoucher([FromBody] CheckVoucherRequest request)
+    {
+        var result = await bookingService.CheckVoucherAsync(CurrentUserId, request);
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     [HttpPost("{id:long}/rate")]
