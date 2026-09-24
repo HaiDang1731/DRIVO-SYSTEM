@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../../core/api_service.dart';
 import '../../booking/screens/customer_booking_screen.dart';
+import '../../profile/customer_account_screens.dart';
 
 // ═══════════════════════════════════════════════
 //   DRIVO Customer Home Screen  — Premium Design
@@ -58,6 +59,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   }
 
   List<VoucherInfo> _vouchers = [];
+  int _profileRefresh = 0;
 
   Future<void> _loadVouchers() async {
     try {
@@ -108,6 +110,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     ).then((_) {
       _checkActiveBooking();
       _loadVouchers(); // mã vừa dùng sẽ biến khỏi danh sách
+      if (mounted) setState(() => _profileRefresh++); // số chuyến / tổng chi ở tab Tài khoản
     });
   }
 
@@ -135,7 +138,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
           ),
           _ActivityTabView(user: widget.user, onOpenBooking: _openBooking),
           _SupportTabView(),
-          _ProfileTabView(user: widget.user, onLogout: widget.onLogout),
+          _ProfileTabView(key: ValueKey(_profileRefresh), user: widget.user, onLogout: widget.onLogout),
         ],
       ),
       bottomNavigationBar: _buildBottomBar(),
@@ -1327,7 +1330,7 @@ class _SupportTabView extends StatelessWidget {
 class _ProfileTabView extends StatefulWidget {
   final AuthUser user;
   final VoidCallback onLogout;
-  const _ProfileTabView({required this.user, required this.onLogout});
+  const _ProfileTabView({super.key, required this.user, required this.onLogout});
 
   @override
   State<_ProfileTabView> createState() => _ProfileTabViewState();
@@ -1340,12 +1343,46 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
 
+  Map<String, dynamic>? _summary;
+  int _unread = 0;
+
   @override
   void initState() {
     super.initState();
     _currentUser = widget.user;
     _nameCtrl.text = _currentUser.fullName;
     _emailCtrl.text = _currentUser.email ?? '';
+    _loadSummary();
+  }
+
+  /// Số chuyến / tổng chi / tiết kiệm + số thông báo chưa đọc.
+  Future<void> _loadSummary() async {
+    final results = await Future.wait([
+      ApiService.get('/bookings/customer-summary'),
+      ApiService.get('/notifications?take=1'),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      if (results[0]['success'] == true) _summary = results[0]['data'];
+      if (results[1]['success'] == true) _unread = (results[1]['data']?['unread'] as num?)?.toInt() ?? 0;
+    });
+  }
+
+  Future<void> _openAndRefresh(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    _loadSummary();
+  }
+
+  String get _memberSince {
+    final s = _summary?['memberSince']?.toString();
+    final d = s == null ? null : DateTime.tryParse(s);
+    return d == null ? '' : 'Thành viên từ ${d.month.toString().padLeft(2, '0')}/${d.year}';
+  }
+
+  String _shortVnd(double v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(v % 1000000 == 0 ? 0 : 1)}tr';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(0)}K';
+    return v.toStringAsFixed(0);
   }
 
   Future<void> _saveProfile() async {
@@ -1432,7 +1469,10 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080C1A),
-      body: CustomScrollView(
+      body: RefreshIndicator(
+        onRefresh: _loadSummary,
+        child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           SliverToBoxAdapter(
             child: Container(
@@ -1458,7 +1498,10 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
                     ),
                     child: Center(
                       child: Text(
-                        _currentUser.fullName.isNotEmpty ? _currentUser.fullName[0].toUpperCase() : 'D',
+                        // Tên người Việt: lấy chữ đầu của tên (từ cuối), vd "Bùi Hải Đăng" -> "Đ"
+                        _currentUser.fullName.trim().isNotEmpty
+                            ? _currentUser.fullName.trim().split(' ').last[0].toUpperCase()
+                            : 'D',
                         style: GoogleFonts.poppins(fontSize: 30, fontWeight: FontWeight.w800, color: Colors.white),
                       ),
                     ),
@@ -1523,14 +1566,21 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
                       const SizedBox(height: 2),
                       Text(_currentUser.email!, style: GoogleFonts.inter(fontSize: 14, color: Colors.white54)),
                     ],
+                    if (_memberSince.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(_memberSince, style: GoogleFonts.inter(fontSize: 12, color: Colors.white38)),
+                    ],
                   ],
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 8,
                     children: [
-                      _statPill('0 Điểm', '⭐'),
-                      const SizedBox(width: 12),
-                      _statPill('0 Chuyến', '🚗'),
+                      _statPill('${_summary?['completedTrips'] ?? 0} chuyến', '🚗'),
+                      _statPill('Đã chi ${_shortVnd((_summary?['totalSpent'] as num?)?.toDouble() ?? 0)}', '💳'),
+                      if (((_summary?['totalSaved'] as num?) ?? 0) > 0)
+                        _statPill('Tiết kiệm ${_shortVnd((_summary!['totalSaved'] as num).toDouble())}', '🎁'),
                     ],
                   ),
                 ],
@@ -1543,14 +1593,17 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
               delegate: SliverChildListDelegate([
                 _menuGroup([
                   _menuItem(Icons.directions_car_filled_rounded, 'Danh sách xe của tôi', const Color(0xFF6C63FF), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerVehiclesScreen()))),
-                  _menuItem(Icons.credit_card_rounded, 'Phương thức thanh toán', const Color(0xFF3B82F6)),
-                  _menuItem(Icons.receipt_long_rounded, 'Lịch sử giao dịch', const Color(0xFF06B6D4)),
+                  _menuItem(Icons.credit_card_rounded, 'Phương thức thanh toán', const Color(0xFF3B82F6),
+                      onTap: () => showPaymentMethodSheet(context)),
+                  _menuItem(Icons.receipt_long_rounded, 'Lịch sử giao dịch', const Color(0xFF06B6D4),
+                      onTap: () => _openAndRefresh(const TransactionHistoryScreen())),
                 ]),
                 const SizedBox(height: 12),
                 _menuGroup([
-                  _menuItem(Icons.notifications_rounded, 'Thông báo', const Color(0xFFF59E0B)),
+                  _menuItem(Icons.notifications_rounded, 'Thông báo', const Color(0xFFF59E0B),
+                      badge: _unread, onTap: () => _openAndRefresh(const NotificationsScreen())),
                   _menuItem(Icons.security_rounded, 'Bảo mật (Đổi mật khẩu)', const Color(0xFF10B981), onTap: _showChangePasswordDialog),
-                  _menuItem(Icons.info_outline_rounded, 'Về DRIVO v2.0', Colors.white38),
+                  _menuItem(Icons.info_outline_rounded, 'Về DRIVO', Colors.white38, onTap: () => showAboutDrivo(context)),
                 ]),
                 const SizedBox(height: 24),
                 GestureDetector(
@@ -1578,6 +1631,7 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -1604,7 +1658,7 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
     );
   }
 
-  Widget _menuItem(IconData icon, String title, Color color, {VoidCallback? onTap}) {
+  Widget _menuItem(IconData icon, String title, Color color, {VoidCallback? onTap, int badge = 0}) {
     return ListTile(
       leading: Container(
         width: 36,
@@ -1613,8 +1667,17 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
         child: Icon(icon, color: color, size: 19),
       ),
       title: Text(title, style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-      trailing: Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
-      onTap: onTap ?? () {},
+      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (badge > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(color: const Color(0xFFEF4444), borderRadius: BorderRadius.circular(10)),
+            child: Text(badge > 99 ? '99+' : '$badge',
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+          ),
+        Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
+      ]),
+      onTap: onTap,
     );
   }
 }

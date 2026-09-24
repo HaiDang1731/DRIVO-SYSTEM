@@ -8,6 +8,7 @@ import '../../../../core/drivo_map.dart';
 import '../../../../core/geo_utils.dart';
 import '../../../../core/location_service.dart';
 import '../../../../core/tracking_service.dart';
+import '../../profile/customer_account_screens.dart' show PaymentPreference;
 
 /// Màn hình Đặt chuyến DRIVO
 class CustomerBookingScreen extends StatefulWidget {
@@ -102,6 +103,10 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   void initState() {
     super.initState();
     _activeBooking = widget.initialActiveBooking;
+    // Phương thức thanh toán mặc định chọn ở tab Tài khoản
+    PaymentPreference.get().then((m) {
+      if (mounted) setState(() => _paymentMethod = m);
+    });
     _radarController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),

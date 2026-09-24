@@ -76,6 +76,15 @@ public class BookingController(IBookingService bookingService) : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Số liệu tài khoản khách: số chuyến, tổng chi, tiền tiết kiệm nhờ khuyến mãi</summary>
+    [HttpGet("customer-summary")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> GetCustomerSummary()
+    {
+        var result = await bookingService.GetCustomerSummaryAsync(CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Danh sách mã khuyến mãi khách còn dùng được</summary>
     [HttpGet("vouchers")]
     [Authorize(Roles = "CUSTOMER")]

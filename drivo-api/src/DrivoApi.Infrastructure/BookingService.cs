@@ -541,6 +541,39 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         return BaseResponse<List<BookingDetailResponse>>.Ok(list);
     }
 
+    public async Task<BaseResponse<CustomerSummaryResponse>> GetCustomerSummaryAsync(int userId)
+    {
+        var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null) return BaseResponse<CustomerSummaryResponse>.Fail("Không tìm thấy tài khoản.");
+
+        var customerId = await db.Customers.Where(c => c.UserId == userId).Select(c => c.Id).FirstOrDefaultAsync();
+        var stats = await db.Bookings.AsNoTracking()
+            .Where(b => b.CustomerId == customerId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Completed = g.Count(b => b.Status == BookingStatus.Completed),
+                Cancelled = g.Count(b => b.Status == BookingStatus.Cancelled),
+                Spent = g.Where(b => b.Status == BookingStatus.Completed).Sum(b => (decimal?)b.FinalPrice) ?? 0m,
+                Saved = g.Where(b => b.Status == BookingStatus.Completed).Sum(b => (decimal?)b.Discount) ?? 0m,
+                Km = g.Where(b => b.Status == BookingStatus.Completed).Sum(b => (decimal?)(b.ActualDistanceKm ?? b.EstimatedDistanceKm)) ?? 0m
+            })
+            .FirstOrDefaultAsync();
+
+        return BaseResponse<CustomerSummaryResponse>.Ok(new CustomerSummaryResponse
+        {
+            FullName = user.FullName,
+            Phone = user.Phone,
+            Email = user.Email,
+            MemberSince = user.CreatedAt,
+            CompletedTrips = stats?.Completed ?? 0,
+            CancelledTrips = stats?.Cancelled ?? 0,
+            TotalSpent = stats?.Spent ?? 0,
+            TotalSaved = stats?.Saved ?? 0,
+            TotalDistanceKm = Math.Round(stats?.Km ?? 0, 1)
+        });
+    }
+
     private static T MapToDetailResponse<T>(Booking b, T dto) where T : BookingDetailResponse
     {
         dto.Id = b.Id;

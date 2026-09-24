@@ -78,6 +78,21 @@ public class CheckVoucherResponse
     public decimal Discount { get; set; }
 }
 
+public class CustomerSummaryResponse
+{
+    public string FullName { get; set; } = null!;
+    public string Phone { get; set; } = null!;
+    public string? Email { get; set; }
+    public DateTime MemberSince { get; set; }
+    public int CompletedTrips { get; set; }
+    public int CancelledTrips { get; set; }
+    /// <summary>Tổng khách đã trả cho các chuyến hoàn thành.</summary>
+    public decimal TotalSpent { get; set; }
+    /// <summary>Tổng tiền được giảm nhờ mã khuyến mãi.</summary>
+    public decimal TotalSaved { get; set; }
+    public decimal TotalDistanceKm { get; set; }
+}
+
 public class CancelBookingRequest
 {
     public string? Reason { get; set; }
