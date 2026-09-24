@@ -302,15 +302,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                   Text('Cuốc xe mới!', style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
                   Text(offer.bookingCode, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
                 ])),
+                // Hiện đúng số khách trả (khớp màn khách); mã giảm do DRIVO bù nên thu nhập tài xế không đổi.
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(color: DrivoColors.success.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(20)),
                   child: Text(
-                    '${(offer.estimatedPrice / 1000).toStringAsFixed(0)}K ₫',
+                    '${((offer.estimatedPrice - offer.discount) / 1000).toStringAsFixed(0)}K ₫',
                     style: GoogleFonts.inter(color: DrivoColors.success, fontWeight: FontWeight.w800, fontSize: 16),
                   ),
                 ),
               ]),
+              if (offer.discount > 0) ...[
+                const SizedBox(height: 8),
+                _VoucherNote(booking: offer),
+              ],
               const SizedBox(height: 14),
 
               // Khoảng cách từ tài xế tới điểm đón (server tính theo vị trí GPS gần nhất)
@@ -888,9 +893,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 _TripInfoItem('Thời gian', '~${b.estimatedDurationMin} phút'),
                 _TripInfoItem('Hộp số', b.vehicleTransmission == 'Automatic' ? 'Tự động' : 'Số sàn'),
-                _TripInfoItem('Doanh thu', '${(b.estimatedPrice / 1000).toStringAsFixed(0)}K ₫',
+                _TripInfoItem('Khách trả', '${((b.estimatedPrice - b.discount) / 1000).toStringAsFixed(0)}K ₫',
                     valueColor: DrivoColors.success),
               ]),
+              if (b.discount > 0) ...[
+                const SizedBox(height: 12),
+                _VoucherNote(booking: b),
+              ],
             ]),
           ),
 
@@ -1317,6 +1326,36 @@ class _TripRouteRow extends StatelessWidget {
       ])),
     ]),
   );
+}
+
+class _VoucherNote extends StatelessWidget {
+  final DriverBooking booking;
+  const _VoucherNote({required this.booking});
+
+  @override
+  Widget build(BuildContext context) {
+    String k(double v) => '${(v / 1000).toStringAsFixed(0)}K';
+    final b = booking;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: DrivoColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        const Icon(Icons.local_offer_rounded, color: DrivoColors.warning, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Khách dùng mã${b.voucherCode != null ? ' ${b.voucherCode}' : ''} giảm ${k(b.discount)}, DRIVO bù lại. '
+            'Thu nhập của bạn vẫn tính trên cước ${k(b.estimatedPrice)}.',
+            style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 12),
+          ),
+        ),
+      ]),
+    );
+  }
 }
 
 class _TripInfoItem extends StatelessWidget {
