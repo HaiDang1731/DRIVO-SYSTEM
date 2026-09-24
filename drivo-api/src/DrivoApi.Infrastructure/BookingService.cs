@@ -383,6 +383,9 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         });
         await db.SaveChangesAsync();
 
+        // Gửi ngay lượt 1 cho tài xế điểm cao nhất
+        await DispatchAsync(booking);
+
         await NotifyStatusAsync(booking);
         return await GetBookingByIdAsync(booking.Id, userId);
     }
@@ -622,6 +625,13 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var newStatus = isOnline ? DriverStatus.Online : DriverStatus.Offline;
         LogDriverStatusChange(driver.Id, driver.DriverStatus, newStatus,
             isOnline ? "Tài xế bật trực tuyến" : "Tài xế tắt trực tuyến", now);
+        if (!isOnline)
+        {
+            // Nhả các cuốc đang ưu tiên cho mình để chuyển ngay cho tài xế khác
+            await db.BookingDriverOffers
+                .Where(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent)
+                .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Cancelled).SetProperty(o => o.RespondedAt, now));
+        }
         driver.DriverStatus = newStatus;
         driver.UpdatedAt = now;
         if (hasLocation)
@@ -647,39 +657,211 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         return BaseResponse<bool>.Ok(true, isOnline ? "Bạn đang trực tuyến." : "Bạn đã ngoại tuyến.");
     }
 
+    // ══════════════════════════════════════════════════════════
+    //  ĐIỀU PHỐI CUỐC: gửi lần lượt cho tài xế điểm cao nhất
+    // ══════════════════════════════════════════════════════════
+    //  Mỗi lượt: 1 tài xế được ưu tiên trong OfferTimeout. Bỏ qua / hết giờ -> lượt sau.
+    //  Hết MaxOfferRounds lượt hoặc không còn ứng viên -> mở cho mọi tài xế trong bán kính.
+    //  Không có tiến trình nền: trạng thái được đẩy tiếp mỗi khi tài xế lấy danh sách cuốc (5 giây/lần).
+
+    private static readonly TimeSpan OfferTimeout = TimeSpan.FromSeconds(15);
+    private const int MaxOfferRounds = 3;
+    /// <summary>Lượt ghi nhận tài xế bấm Bỏ qua khi cuốc đã mở cho mọi người (không tính vào lượt ưu tiên).</summary>
+    private const int BroadcastSkipRound = MaxOfferRounds + 1;
+    private const double WeightDistance = 0.6, WeightRating = 0.2, WeightCompletion = 0.2;
+    /// <summary>Tài xế chưa đủ dữ liệu được tính mức trung bình khá (≈ 4,5 sao / 90% hoàn thành).</summary>
+    private const double DefaultRatingScore = 0.9, DefaultCompletionScore = 0.9;
+    private const int MinTripsForCompletionRate = 3;
+
+    private sealed record DriverCandidate(int DriverId, double Km, double Score);
+
+    /// <summary>Tài xế trực tuyến, đã duyệt, vị trí mới, trong bán kính; xếp theo điểm giảm dần.</summary>
+    private async Task<List<DriverCandidate>> RankCandidatesAsync(Booking b, ICollection<int> excludeDriverIds)
+    {
+        var since = DateTime.UtcNow - FreshLocationWindow;
+        var drivers = await db.Drivers.AsNoTracking()
+            .Where(d => d.DriverStatus == DriverStatus.Online &&
+                        d.VerificationStatus == VerificationStatus.Approved &&
+                        d.User.Status == UserStatus.Active &&
+                        d.CurrentLatitude != null && d.CurrentLongitude != null &&
+                        d.LastLocationAt != null && d.LastLocationAt >= since &&
+                        !excludeDriverIds.Contains(d.Id))
+            .Select(d => new { d.Id, Lat = d.CurrentLatitude!.Value, Lng = d.CurrentLongitude!.Value, d.RatingAverage, d.RatingCount })
+            .ToListAsync();
+
+        var nearby = drivers
+            .Where(d => GeoUtils.IsValid(d.Lat, d.Lng))
+            .Select(d => new { d.Id, d.RatingAverage, d.RatingCount, Km = GeoUtils.HaversineKm(d.Lat, d.Lng, b.PickupLatitude, b.PickupLongitude) })
+            .Where(d => d.Km <= PendingSearchRadiusKm)
+            .ToList();
+        if (nearby.Count == 0) return [];
+
+        // Tỉ lệ hoàn thành 30 ngày: hoàn thành / (hoàn thành + tài xế tự hủy). Khách hủy không tính cho tài xế.
+        var ids = nearby.Select(d => d.Id).ToList();
+        var from = DateTime.UtcNow.AddDays(-30);
+        var stats = await db.Bookings.AsNoTracking()
+            .Where(x => x.DriverId != null && ids.Contains(x.DriverId.Value) && x.CreatedAt >= from &&
+                        (x.Status == BookingStatus.Completed || (x.Status == BookingStatus.Cancelled && x.CancelledBy == "DRIVER")))
+            .GroupBy(x => x.DriverId!.Value)
+            .Select(g => new { DriverId = g.Key, Completed = g.Count(x => x.Status == BookingStatus.Completed), Total = g.Count() })
+            .ToDictionaryAsync(x => x.DriverId);
+
+        return nearby
+            .Select(d =>
+            {
+                var distance = 1.0 - d.Km / PendingSearchRadiusKm;
+                var rating = d.RatingCount > 0 ? (double)d.RatingAverage / 5.0 : DefaultRatingScore;
+                var completion = stats.TryGetValue(d.Id, out var s) && s.Total >= MinTripsForCompletionRate
+                    ? (double)s.Completed / s.Total
+                    : DefaultCompletionScore;
+                return new DriverCandidate(d.Id, d.Km, WeightDistance * distance + WeightRating * rating + WeightCompletion * completion);
+            })
+            .OrderByDescending(c => c.Score)
+            .ThenBy(c => c.Km)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Đẩy trạng thái điều phối của 1 cuốc: hết giờ -> Expired, rồi gửi lượt tiếp cho ứng viên tốt nhất chưa được gửi.
+    /// Trả về các offer hiện có của cuốc (đã cập nhật).
+    /// </summary>
+    private async Task<List<BookingDriverOffer>> DispatchAsync(Booking b)
+    {
+        var now = DateTime.UtcNow;
+        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id).ToListAsync();
+
+        var stale = offers.Where(o => o.OfferStatus == OfferStatus.Sent && o.SentAt + OfferTimeout <= now).Select(o => o.Id).ToList();
+        if (stale.Count > 0)
+        {
+            await db.BookingDriverOffers
+                .Where(o => stale.Contains(o.Id) && o.OfferStatus == OfferStatus.Sent)
+                .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Expired).SetProperty(o => o.RespondedAt, now));
+            foreach (var o in offers.Where(o => stale.Contains(o.Id))) { o.OfferStatus = OfferStatus.Expired; o.RespondedAt = now; }
+        }
+
+        if (offers.Any(o => o.OfferStatus == OfferStatus.Sent)) return offers;
+
+        var round = offers.Where(o => o.OfferRound <= MaxOfferRounds).Select(o => o.OfferRound).DefaultIfEmpty(0).Max();
+        if (round >= MaxOfferRounds) return offers;
+
+        var best = (await RankCandidatesAsync(b, offers.Select(o => o.DriverId).ToList())).FirstOrDefault();
+        if (best == null) return offers;
+
+        var offer = new BookingDriverOffer
+        {
+            BookingId = b.Id,
+            DriverId = best.DriverId,
+            OfferRound = round + 1,
+            DistanceToPickupKm = Math.Round((decimal)best.Km, 2),
+            EstimatedArrivalMin = Math.Max(1, (int)Math.Ceiling(best.Km * GeoUtils.RoadFactor / GeoUtils.ScooterSpeedKmh * 60.0)),
+            OfferStatus = OfferStatus.Sent,
+            SentAt = now
+        };
+        db.BookingDriverOffers.Add(offer);
+        try
+        {
+            await db.SaveChangesAsync();
+            offers.Add(offer);
+        }
+        catch (DbUpdateException)
+        {
+            // Tài xế khác lấy danh sách cùng lúc đã tạo đúng offer này (UQ Booking+Driver+Round)
+            db.Entry(offer).State = EntityState.Detached;
+            offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id).ToListAsync();
+        }
+        return offers;
+    }
+
+    /// <summary>Đang ưu tiên riêng cho 1 tài xế (còn hạn) hay đã mở cho mọi người.</summary>
+    private static BookingDriverOffer? ActiveOffer(IEnumerable<BookingDriverOffer> offers, DateTime now) =>
+        offers.FirstOrDefault(o => o.OfferStatus == OfferStatus.Sent && o.SentAt + OfferTimeout > now);
+
     public async Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int userId)
     {
         var driver = await db.Drivers.AsNoTracking().FirstOrDefaultAsync(d => d.UserId == userId);
+        if (driver == null)
+            return BaseResponse<List<BookingDetailResponse>>.Ok([]);
+        if (driver.CurrentLatitude is not { } dLat || driver.CurrentLongitude is not { } dLng || !GeoUtils.IsValid(dLat, dLng))
+            return BaseResponse<List<BookingDetailResponse>>.Ok([]); // chưa có vị trí -> không ghép được cuốc gần
 
-        // Lấy các cuốc đang tìm tài xế (chưa có driver nào nhận)
-        var query = db.Bookings
+        var candidates = await db.Bookings
             .Include(b => b.CustomerVehicle)
             .Include(b => b.Driver)
                 .ThenInclude(d => d!.User)
             .Where(b => b.Status == BookingStatus.SearchingDriver && b.DriverId == null)
-            .OrderBy(b => b.CreatedAt);
+            .OrderBy(b => b.CreatedAt)
+            .Take(200)
+            .ToListAsync();
 
-        if (driver?.CurrentLatitude is { } dLat && driver.CurrentLongitude is { } dLng && GeoUtils.IsValid(dLat, dLng))
+        var nearby = candidates
+            .Where(b => GeoUtils.IsValid(b.PickupLatitude, b.PickupLongitude))
+            .Select(b => (Booking: b, Km: GeoUtils.HaversineKm(dLat, dLng, b.PickupLatitude, b.PickupLongitude)))
+            .Where(x => x.Km <= PendingSearchRadiusKm)
+            .OrderBy(x => x.Km)
+            .Take(10)
+            .ToList();
+
+        var result = new List<BookingDetailResponse>();
+        foreach (var (booking, km) in nearby)
         {
-            var candidates = await query.Take(200).ToListAsync();
-            var nearby = candidates
-                .Where(b => GeoUtils.IsValid(b.PickupLatitude, b.PickupLongitude))
-                .Select(b => (Booking: b, Km: GeoUtils.HaversineKm(dLat, dLng, b.PickupLatitude, b.PickupLongitude)))
-                .Where(x => x.Km <= PendingSearchRadiusKm)
-                .OrderBy(x => x.Km)
-                .Take(10)
-                .Select(x =>
-                {
-                    var dto = MapToDetailResponse(x.Booking);
-                    dto.DistanceToPickupKm = Math.Round((decimal)x.Km, 2);
-                    return dto;
-                })
-                .ToList();
-            return BaseResponse<List<BookingDetailResponse>>.Ok(nearby);
+            var offers = await DispatchAsync(booking);
+            var now = DateTime.UtcNow;
+            if (offers.Any(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Rejected))
+                continue; // tài xế đã bấm Bỏ qua cuốc này
+
+            var active = ActiveOffer(offers, now);
+            if (active != null && active.DriverId != driver.Id)
+                continue; // đang ưu tiên cho tài xế khác
+
+            var dto = MapToDetailResponse(booking);
+            dto.DistanceToPickupKm = Math.Round((decimal)km, 2);
+            if (active != null)
+                dto.OfferSecondsLeft = Math.Max(1, (int)Math.Ceiling((active.SentAt + OfferTimeout - now).TotalSeconds));
+            result.Add(dto);
         }
 
-        var bookings = await query.Take(10).ToListAsync();
-        return BaseResponse<List<BookingDetailResponse>>.Ok(bookings.Select(b => MapToDetailResponse(b)).ToList());
+        // Cuốc đang ưu tiên riêng cho mình lên đầu
+        return BaseResponse<List<BookingDetailResponse>>.Ok(
+            result.OrderBy(d => d.OfferSecondsLeft == null).ThenBy(d => d.DistanceToPickupKm).ToList());
+    }
+
+    public async Task<BaseResponse<bool>> RejectBookingAsync(long bookingId, int userId)
+    {
+        var driver = await db.Drivers.AsNoTracking().FirstOrDefaultAsync(d => d.UserId == userId);
+        if (driver == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy thông tin tài xế.");
+
+        var booking = await db.Bookings.AsNoTracking().FirstOrDefaultAsync(b => b.Id == bookingId);
+        if (booking == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy cuốc xe.");
+
+        var now = DateTime.UtcNow;
+        var rejected = await db.BookingDriverOffers
+            .Where(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Rejected).SetProperty(o => o.RespondedAt, now));
+
+        if (rejected == 0 && !await db.BookingDriverOffers.AnyAsync(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Rejected))
+        {
+            // Cuốc đang mở cho mọi người: ghi nhận để không hiện lại cho tài xế này
+            var skip = new BookingDriverOffer
+            {
+                BookingId = bookingId,
+                DriverId = driver.Id,
+                OfferRound = BroadcastSkipRound,
+                OfferStatus = OfferStatus.Rejected,
+                SentAt = now,
+                RespondedAt = now
+            };
+            db.BookingDriverOffers.Add(skip);
+            try { await db.SaveChangesAsync(); }
+            catch (DbUpdateException) { db.Entry(skip).State = EntityState.Detached; }
+        }
+
+        // Chuyển ngay sang tài xế tiếp theo, không đợi lượt poll sau
+        if (booking.Status == BookingStatus.SearchingDriver && booking.DriverId == null)
+            await DispatchAsync(booking);
+
+        return BaseResponse<bool>.Ok(true, "Đã bỏ qua cuốc.");
     }
 
     public async Task<BaseResponse<BookingDetailResponse>> AcceptBookingAsync(long bookingId, int userId)
@@ -700,6 +882,15 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             return BaseResponse<BookingDetailResponse>.Fail("Bạn đang có cuốc chưa hoàn thành.");
 
         var now = DateTime.UtcNow;
+
+        // Đang trong lượt ưu tiên của tài xế khác thì chưa được nhận (cho thêm 3 giây bù độ trễ mạng)
+        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == bookingId).ToListAsync();
+        if (offers.Any(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Rejected))
+            return BaseResponse<BookingDetailResponse>.Fail("Bạn đã bỏ qua cuốc này.");
+        var mine = offers.FirstOrDefault(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent &&
+                                              o.SentAt + OfferTimeout + TimeSpan.FromSeconds(3) > now);
+        if (mine == null && ActiveOffer(offers, now) is { } other && other.DriverId != driver.Id)
+            return BaseResponse<BookingDetailResponse>.Fail("Cuốc này đang được ưu tiên cho tài xế khác.");
 
         // Giành cuốc bằng 1 UPDATE có điều kiện ở DB (atomic) -> 2 tài xế bấm nhận cùng lúc
         // chỉ 1 người giành được; nếu dùng SaveChangesAsync bình thường (đọc rồi ghi) người ghi
@@ -733,6 +924,14 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
                     .SetProperty(b => b.AcceptedAt, (DateTime?)null));
             return BaseResponse<BookingDetailResponse>.Fail("Bạn vừa nhận một cuốc khác.");
         }
+
+        // Lịch sử điều phối: offer của mình -> Accepted, offer còn treo của người khác -> Cancelled
+        await db.BookingDriverOffers
+            .Where(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Accepted).SetProperty(o => o.RespondedAt, now));
+        await db.BookingDriverOffers
+            .Where(o => o.BookingId == bookingId && o.OfferStatus == OfferStatus.Sent)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Cancelled).SetProperty(o => o.RespondedAt, now));
 
         var booking = await db.Bookings
             .Include(b => b.CustomerVehicle)
@@ -1247,6 +1446,21 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             return BaseResponse<AdminBookingDetailResponse>.Fail("Không tìm thấy chuyến đi");
 
         var dto = MapToDetailResponse(b, new AdminBookingDetailResponse());
+
+        dto.Offers = await db.BookingDriverOffers.AsNoTracking()
+            .Where(o => o.BookingId == bookingId)
+            .OrderBy(o => o.SentAt).ThenBy(o => o.Id)
+            .Select(o => new BookingOfferDto
+            {
+                DriverId = o.DriverId,
+                DriverName = o.Driver.User.FullName,
+                Round = o.OfferRound,
+                DistanceToPickupKm = o.DistanceToPickupKm,
+                Status = o.OfferStatus.ToString(),
+                SentAt = o.SentAt,
+                RespondedAt = o.RespondedAt
+            })
+            .ToListAsync();
         dto.Customer = new AdminBookingCustomerDto
         {
             Id = b.Customer.Id,

@@ -149,6 +149,9 @@ public class BookingDetailResponse
     /// <summary>Chỉ có trong danh sách cuốc chờ của tài xế: khoảng cách (km) từ tài xế tới điểm đón</summary>
     public decimal? DistanceToPickupKm { get; set; }
 
+    /// <summary>Cuốc chờ đang được ưu tiên riêng cho tài xế này: số giây còn lại để nhận (null = đang mở cho mọi tài xế).</summary>
+    public int? OfferSecondsLeft { get; set; }
+
     public BookingVehicleSummaryDto Vehicle { get; set; } = null!;
     public BookingDriverSummaryDto? Driver { get; set; }
 }
@@ -191,8 +194,22 @@ public class PricingRuleSnapshotDto
     public decimal OverDistanceTolerancePercent { get; set; }
 }
 
+public class BookingOfferDto
+{
+    public int DriverId { get; set; }
+    public string DriverName { get; set; } = null!;
+    public int Round { get; set; }
+    public decimal? DistanceToPickupKm { get; set; }
+    /// <summary>Sent | Accepted | Rejected | Expired | Cancelled</summary>
+    public string Status { get; set; } = null!;
+    public DateTime SentAt { get; set; }
+    public DateTime? RespondedAt { get; set; }
+}
+
 public class AdminBookingDetailResponse : BookingDetailResponse
 {
+    /// <summary>Lịch sử gửi cuốc lần lượt cho từng tài xế.</summary>
+    public List<BookingOfferDto> Offers { get; set; } = [];
     public AdminBookingCustomerDto Customer { get; set; } = null!;
     public string? CancelledBy { get; set; }
     public string? CancellationReason { get; set; }

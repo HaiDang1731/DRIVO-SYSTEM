@@ -80,6 +80,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    /// <summary>Tài xế bỏ qua cuốc đang được gửi cho mình -> chuyển ngay cho tài xế tiếp theo</summary>
+    [HttpPost("bookings/{id:long}/reject")]
+    public async Task<IActionResult> RejectBooking(long id)
+    {
+        var result = await bookingService.RejectBookingAsync(id, CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Tài xế hủy chuyến</summary>
     [HttpPost("bookings/{id:long}/cancel")]
     public async Task<IActionResult> CancelBooking(long id, [FromBody] DrivoApi.Application.DTOs.Booking.CancelBookingRequest request)

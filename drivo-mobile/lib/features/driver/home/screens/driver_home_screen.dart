@@ -312,6 +312,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                   ),
                 ),
               ]),
+              if (offer.offerSecondsLeft != null) ...[
+                const SizedBox(height: 10),
+                _OfferCountdown(
+                  seconds: offer.offerSecondsLeft!,
+                  onExpired: () {
+                    if (!mounted || _acceptingBooking || !ctx.mounted) return;
+                    Navigator.pop(ctx);
+                    setState(() => _pendingOffer = null);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Hết thời gian ưu tiên, cuốc đã chuyển cho tài xế khác.'),
+                      backgroundColor: DrivoColors.warning,
+                    ));
+                  },
+                ),
+              ],
               if (offer.discount > 0) ...[
                 const SizedBox(height: 8),
                 _VoucherNote(booking: offer),
@@ -382,6 +397,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                   onPressed: _acceptingBooking ? null : () {
                     Navigator.pop(ctx);
                     setState(() => _pendingOffer = null);
+                    // Báo server để chuyển ngay cho tài xế tiếp theo và không hiện lại cuốc này
+                    ApiService.rejectBooking(offer.id);
                   },
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: DrivoColors.border),
@@ -1326,6 +1343,66 @@ class _TripRouteRow extends StatelessWidget {
       ])),
     ]),
   );
+}
+
+/// Thanh đếm ngược lượt ưu tiên riêng cho tài xế; hết giờ gọi onExpired.
+class _OfferCountdown extends StatefulWidget {
+  final int seconds;
+  final VoidCallback onExpired;
+  const _OfferCountdown({required this.seconds, required this.onExpired});
+
+  @override
+  State<_OfferCountdown> createState() => _OfferCountdownState();
+}
+
+class _OfferCountdownState extends State<_OfferCountdown> {
+  late int _left = widget.seconds;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return;
+      setState(() => _left--);
+      if (_left <= 0) {
+        t.cancel();
+        widget.onExpired();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final urgent = _left <= 5;
+    final color = urgent ? DrivoColors.danger : DrivoColors.primary;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Icon(Icons.timer_outlined, size: 16, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text('Cuốc ưu tiên cho bạn · còn ${_left.clamp(0, 99)} giây',
+              style: GoogleFonts.inter(color: color, fontSize: 12.5, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 6),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: LinearProgressIndicator(
+          value: widget.seconds <= 0 ? 0 : (_left.clamp(0, widget.seconds) / widget.seconds),
+          minHeight: 5,
+          backgroundColor: DrivoColors.border,
+          color: color,
+        ),
+      ),
+    ]);
+  }
 }
 
 class _VoucherNote extends StatelessWidget {

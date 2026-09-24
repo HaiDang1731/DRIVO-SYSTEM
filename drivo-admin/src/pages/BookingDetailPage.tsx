@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, AdminBookingDetail, TrailPoint } from '../services/api';
 import { acquireTracking, onBookingStatusChanged, onDriverLocation } from '../services/tracking';
 import { DotMarker, FitBounds, MapView, RealtimeIndicator, RouteLine } from '../components/MapKit';
@@ -260,6 +260,45 @@ export function BookingDetailPage() {
           </div>
         </div>
       </div>
+
+      {data.offers && data.offers.length > 0 && (
+        <div className="card" style={{ marginTop: 20, padding: 0 }}>
+          <h3 className="section-title" style={{ padding: '20px 20px 0' }}>Lịch sử gửi cuốc cho tài xế</h3>
+          <p style={{ padding: '0 20px', margin: '6px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+            Cuốc được gửi lần lượt cho tài xế điểm cao nhất (gần + sao + tỉ lệ hoàn thành), mỗi người 15 giây.
+            Sau 3 lượt chưa ai nhận thì mở cho mọi tài xế gần đó.
+          </p>
+          <div className="table-responsive">
+            <table className="table">
+              <thead>
+                <tr><th>Lượt</th><th>Tài xế</th><th>Cách điểm đón</th><th>Kết quả</th><th>Gửi lúc</th><th>Phản hồi lúc</th></tr>
+              </thead>
+              <tbody>
+                {data.offers.map((o, i) => {
+                  const result: Record<string, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }> = {
+                    Sent: { label: 'Đang chờ', type: 'info' },
+                    Accepted: { label: 'Đã nhận', type: 'success' },
+                    Rejected: { label: 'Bỏ qua', type: 'danger' },
+                    Expired: { label: 'Hết giờ', type: 'warning' },
+                    Cancelled: { label: 'Đã hủy lượt', type: 'warning' },
+                  };
+                  const r = result[o.status] ?? { label: o.status, type: 'info' as const };
+                  return (
+                    <tr key={i}>
+                      <td>{o.round <= 3 ? `#${o.round}` : 'Mở chung'}</td>
+                      <td><Link to={`/drivers/${o.driverId}`}>{o.driverName}</Link></td>
+                      <td>{o.distanceToPickupKm != null ? formatKm(o.distanceToPickupKm) : '—'}</td>
+                      <td><Badge type={r.type}>{r.label}</Badge></td>
+                      <td>{formatDateTime(o.sentAt)}</td>
+                      <td>{o.respondedAt ? formatDateTime(o.respondedAt) : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {data.statusHistory && data.statusHistory.length > 0 && (
         <div className="card" style={{ marginTop: 20, padding: 0 }}>

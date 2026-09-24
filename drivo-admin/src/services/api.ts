@@ -93,6 +93,16 @@ export interface AdminBookingDetail {
   customer?: { fullName?: string; phone?: string } | null;
   trail?: TrailPoint[];
   statusHistory?: { status: string; changedAt: string; note?: string | null }[];
+  /** Lịch sử gửi cuốc lần lượt cho tài xế */
+  offers?: {
+    driverId: number;
+    driverName: string;
+    round: number;
+    distanceToPickupKm?: number | null;
+    status: 'Sent' | 'Accepted' | 'Rejected' | 'Expired' | 'Cancelled' | string;
+    sentAt: string;
+    respondedAt?: string | null;
+  }[];
   // pricing rule snapshot (shape may vary — read defensively)
   pricingRule?: Partial<PricingRuleDto> | null;
   [key: string]: unknown;

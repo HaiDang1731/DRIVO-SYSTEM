@@ -512,6 +512,8 @@ class DriverBooking {
   final double? destinationLongitude;
   final String? routePolyline;
   final double? distanceToPickupKm;
+  /// Số giây còn lại của lượt ưu tiên riêng cho tài xế này (null = cuốc đang mở cho mọi tài xế).
+  final int? offerSecondsLeft;
   final double? pickupDistanceKm;
   final double pickupFee;
   final double waitingFee;
@@ -547,6 +549,7 @@ class DriverBooking {
     this.destinationLongitude,
     this.routePolyline,
     this.distanceToPickupKm,
+    this.offerSecondsLeft,
     this.pickupDistanceKm,
     this.pickupFee = 0,
     this.waitingFee = 0,
@@ -578,6 +581,7 @@ class DriverBooking {
       destinationLongitude: _toD(j['destinationLongitude']),
       routePolyline: j['routePolyline'],
       distanceToPickupKm: _toD(j['distanceToPickupKm']),
+      offerSecondsLeft: _toI(j['offerSecondsLeft']),
       pickupDistanceKm: _toD(j['pickupDistanceKm']),
       pickupFee: _toD(j['pickupFee']) ?? 0,
       waitingFee: _toD(j['waitingFee']) ?? 0,
@@ -905,6 +909,8 @@ class ApiService {
       get('/driver/pending-bookings');
   static Future<Map<String, dynamic>> acceptBooking(int id) =>
       post('/driver/bookings/$id/accept', {});
+  static Future<Map<String, dynamic>> rejectBooking(int id) =>
+      post('/driver/bookings/$id/reject', {});
   static Future<Map<String, dynamic>> updateBookingStatus(int id, String status) =>
       post('/driver/bookings/$id/update-status', {'status': status});
   static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reason) =>

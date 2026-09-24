@@ -130,9 +130,15 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             .Property(pr => pr.VehicleType)
             .HasConversion<string>();
 
+        // CK_BookingDriverOffers_Status: 'SENT' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED' | 'CANCELLED'
         modelBuilder.Entity<BookingDriverOffer>()
             .Property(o => o.OfferStatus)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<OfferStatus>(v));
+
+        modelBuilder.Entity<BookingDriverOffer>(e =>
+        {
+            e.Property(o => o.DistanceToPickupKm).HasPrecision(10, 2);
+        });
 
         // Decimal precision (match SQL schema; default decimal(18,2) would truncate coordinates)
         modelBuilder.Entity<Driver>(e =>
