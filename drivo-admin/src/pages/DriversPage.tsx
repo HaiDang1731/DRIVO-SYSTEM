@@ -97,7 +97,7 @@ export function DriversPage() {
                   <th>Số điện thoại</th>
                   <th>GPLX</th>
                   <th>Hạng bằng</th>
-                  <th>Trạng thái duy nhất</th>
+                  <th>Xác minh</th>
                   <th>Hoạt động</th>
                   <th>Ngày tạo</th>
                   <th>Thao tác</th>
@@ -116,9 +116,28 @@ export function DriversPage() {
                       </div>
                     </td>
                     <td style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{d.phone}</td>
-                    <td style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: 12 }}>{d.licenseNumber}</td>
+                    <td>
+                      <div style={{ fontFamily: 'monospace', color: 'var(--accent)', fontSize: 12 }}>{d.licenseNumber || 'Chưa khai báo'}</div>
+                      {(() => {
+                        if (!d.licenseExpiryDate) return null;
+                        const days = Math.ceil((new Date(`${d.licenseExpiryDate}T00:00:00`).getTime() - Date.now()) / 86400000);
+                        if (days < 0) return <div style={{ fontSize: 11, color: '#FF4757' }}>Hết hạn</div>;
+                        if (days <= 30) return <div style={{ fontSize: 11, color: '#FFA502' }}>Hết hạn sau {days} ngày</div>;
+                        return null;
+                      })()}
+                    </td>
                     <td>{d.licenseClass ?? '-'}</td>
-                    <td> <Badge value={d.verificationStatus} /></td>
+                    <td>
+                      <Badge value={d.verificationStatus} />
+                      {d.profileReviewPending && (
+                        <div style={{ fontSize: 11, color: '#FFA502', marginTop: 4 }}>
+                          ⚠ Cần duyệt lại{d.pendingDocuments ? ` · ${d.pendingDocuments} ảnh chờ` : ''}
+                        </div>
+                      )}
+                      {!d.profileReviewPending && d.pendingDocuments > 0 && (
+                        <div style={{ fontSize: 11, color: '#FFA502', marginTop: 4 }}>{d.pendingDocuments} ảnh chờ duyệt</div>
+                      )}
+                    </td>
                     <td><Badge value={d.driverStatus} /></td>
                     <td>{new Date(d.createdAt).toLocaleDateString('vi-VN')}</td>
                     <td>
@@ -128,11 +147,9 @@ export function DriversPage() {
                             Duyệt
                           </button>
                         )}
-                        {d.verificationStatus !== 'Pending' && (
-                          <button className="btn btn-sm btn-ghost" onClick={() => navigate('/drivers/' + d.driverId)}>
-                            Chi tiết
-                          </button>
-                        )}
+                        <button className="btn btn-sm btn-ghost" onClick={() => navigate('/drivers/' + d.driverId)}>
+                          Chi tiết
+                        </button>
                         <button className={`btn btn-sm ${d.accountStatus === 'Locked' ? 'btn-danger' : 'btn-success'}`}
                           onClick={() => handleToggleLock(d)}>
                           {d.accountStatus === 'Locked' ? 'Mở khóa' : 'Khóa'}

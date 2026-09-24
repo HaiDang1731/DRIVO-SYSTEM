@@ -9,6 +9,7 @@ import '../../../../../core/drivo_map.dart';
 import '../../../../../core/geo_utils.dart';
 import '../../../../../core/location_service.dart';
 import '../../../../../core/theme.dart';
+import '../../profile/driver_profile_view.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   final AuthUser user;
@@ -653,9 +654,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           _buildHomeTab(),
           // Đổi key khi số chuyến đổi -> tab tải lại số liệu sau mỗi chuyến hoàn thành.
           _EarningsTab(key: ValueKey(_profile?.totalTrips), profile: _profile),
-          _ProfileTab(
+          DriverProfileView(
             profile: _profile,
-            user: widget.user,
+            onChanged: _loadProfile,
             onChangePassword: _showChangePasswordDialog,
             onLogout: widget.onLogout,
           ),
@@ -1826,174 +1827,3 @@ class _EarningsTripTile extends StatelessWidget {
   }
 }
 
-// ── Profile Tab ──────────────────────────────────────────────
-class _ProfileTab extends StatefulWidget {
-  final DriverProfile? profile;
-  final AuthUser user;
-  final VoidCallback onChangePassword;
-  final VoidCallback onLogout;
-  const _ProfileTab({required this.profile, required this.user, required this.onChangePassword, required this.onLogout});
-
-  @override
-  State<_ProfileTab> createState() => _ProfileTabState();
-}
-
-class _ProfileTabState extends State<_ProfileTab> {
-  bool _editing = false;
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  bool _saving = false;
-
-  @override
-  void didUpdateWidget(covariant _ProfileTab oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.profile != null && !_editing) {
-      _nameCtrl.text = widget.profile!.fullName;
-      _emailCtrl.text = widget.profile!.email ?? '';
-    }
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    final res = await ApiService.updateDriverProfile({'fullName': _nameCtrl.text, 'email': _emailCtrl.text});
-    setState(() { _saving = false; _editing = false; });
-    if (res['success'] == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('✓ Cập nhật thành công!'), backgroundColor: DrivoColors.success,
-      ));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = widget.profile;
-    if (p == null) return const Center(child: CircularProgressIndicator(color: DrivoColors.primary));
-
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(children: [
-          Container(
-            width: 80, height: 80,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [DrivoColors.primary, DrivoColors.accent]),
-              shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: DrivoColors.primary.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 6))],
-            ),
-            child: Center(child: Text(p.fullName.split(' ').last[0],
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 32))),
-          ),
-          const SizedBox(height: 12),
-          Text(p.fullName, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 20, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            DrivoBadge(p.verificationStatus), const SizedBox(width: 8), DrivoBadge(p.driverStatus),
-          ]),
-          if (p.isFirstLogin) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: DrivoColors.warning.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: DrivoColors.warning.withValues(alpha: 0.3)),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.lock_outline, color: DrivoColors.warning, size: 14),
-                const SizedBox(width: 8),
-                Text('Vui lòng đổi mật khẩu mặc định', style: GoogleFonts.inter(color: DrivoColors.warning, fontSize: 12)),
-              ]),
-            ),
-          ],
-          const SizedBox(height: 24),
-          const SectionHeader('THÔNG TIN CÁ NHÂN'),
-          DrivoCard(child: Column(children: [
-            if (_editing) ...[
-              TextField(controller: _nameCtrl, style: const TextStyle(color: DrivoColors.textPrimary), decoration: const InputDecoration(labelText: 'Họ và tên')),
-              const SizedBox(height: 12),
-              TextField(controller: _emailCtrl, style: const TextStyle(color: DrivoColors.textPrimary), decoration: const InputDecoration(labelText: 'Email')),
-            ] else ...[
-              _InfoRow(Icons.phone_outlined, 'Số điện thoại', p.phone),
-              _InfoRow(Icons.email_outlined, 'Email', p.email ?? '—'),
-              _InfoRow(Icons.badge_outlined, 'Số GPLX', p.licenseNumber),
-              _InfoRow(Icons.drive_eta_outlined, 'Hạng bằng lái', p.licenseClass ?? '—'),
-              _InfoRow(Icons.star_outline, 'Đánh giá', '${p.ratingAverage.toStringAsFixed(1)} ⭐ (${p.totalTrips} chuyến)'),
-            ],
-            const SizedBox(height: 16),
-            Row(children: [
-              if (_editing) ...[
-                Expanded(child: OutlinedButton(
-                  onPressed: () => setState(() => _editing = false),
-                  style: OutlinedButton.styleFrom(foregroundColor: DrivoColors.textSecondary, side: const BorderSide(color: DrivoColors.border)),
-                  child: const Text('Hủy'),
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: ElevatedButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Lưu'),
-                )),
-              ] else
-                Expanded(child: ElevatedButton.icon(
-                  onPressed: () { _nameCtrl.text = p.fullName; _emailCtrl.text = p.email ?? ''; setState(() => _editing = true); },
-                  icon: const Icon(Icons.edit_outlined, size: 16),
-                  label: const Text('Chỉnh sửa thông tin'),
-                  style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.primary.withValues(alpha: 0.15)),
-                )),
-            ]),
-          ])),
-          const SizedBox(height: 16),
-          const SectionHeader('TÀI KHOẢN'),
-          DrivoCard(child: Column(children: [
-            _ActionRow(Icons.lock_outline, 'Đổi mật khẩu', DrivoColors.primary, widget.onChangePassword),
-            const Divider(color: DrivoColors.border, height: 1),
-            _ActionRow(Icons.help_outline, 'Hỗ trợ', DrivoColors.textSecondary, () {}),
-            const Divider(color: DrivoColors.border, height: 1),
-            _ActionRow(Icons.logout_rounded, 'Đăng xuất', DrivoColors.danger, widget.onLogout),
-          ])),
-          const SizedBox(height: 24),
-        ]),
-      ),
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label, value;
-  const _InfoRow(this.icon, this.label, this.value);
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Row(children: [
-      Icon(icon, color: DrivoColors.textMuted, size: 18),
-      const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
-        Text(value, style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontWeight: FontWeight.w500)),
-      ])),
-    ]),
-  );
-}
-
-class _ActionRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _ActionRow(this.icon, this.label, this.color, this.onTap);
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      child: Row(children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(width: 14),
-        Expanded(child: Text(label, style: GoogleFonts.inter(color: color, fontWeight: FontWeight.w500))),
-        const Icon(Icons.chevron_right, color: DrivoColors.textMuted, size: 18),
-      ]),
-    ),
-  );
-}

@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import { Avatar } from '../components/Avatar';
 import { Badge } from '../components/Badge';
 import { DriverLocationCard } from '../components/DriverLocationCard';
+import { DriverProfilePanel } from '../components/DriverProfilePanel';
 
 export default function DriverDetailPage() {
   const { id } = useParams();
@@ -84,7 +85,7 @@ export default function DriverDetailPage() {
           <span style={{ fontSize: 24 }}>🪪</span>
           <div>
             <h3 className="modal-title" style={{ margin: 0 }}>Hồ Sơ Toàn Diện Tài Xế</h3>
-            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Mã tài xế: #{id} 窶｢ User ID: #{data?.userId ?? '...'}</div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Mã tài xế: #{id} · User ID: #{data?.userId ?? '...'}</div>
           </div>
         </div>
       </div>
@@ -195,35 +196,11 @@ export default function DriverDetailPage() {
             <div style={{ flex: 1, padding: '24px 28px', overflowY: 'auto' }}>
               {activeTab === 'profile' && (
                 <div>
-                  <h4 style={{ marginBottom: 16, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
-                    Thông Tin Cá Nhân & Tài Khoản
-                  </h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-                    <div className="input-group">
-                      <label>Họ và tên</label>
-                      <input type="text" className="input" value={data.fullName} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Số điện thoại (Tên đăng nhập)</label>
-                      <input type="text" className="input" value={data.phone} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Email</label>
-                      <input type="text" className="input" value={data.email || 'Chưa cung cấp'} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Ngày tạo tài khoản</label>
-                      <input type="text" className="input" value={formatDate(data.createdAt)} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Đăng nhập lần cuối</label>
-                      <input type="text" className="input" value={data.lastLoginAt ? formatDate(data.lastLoginAt) : 'Chưa đăng nhập'} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Trạng thái tài xế hiện tại</label>
-                      <input type="text" className="input" value={data.driverStatus || 'Offline'} readOnly />
-                    </div>
-                  </div>
+                  <DriverProfilePanel
+                    data={data}
+                    onReload={fetchDetail}
+                    onMessage={(text, type) => setActionMsg({ text, type })}
+                  />
 
                   <h4 style={{ marginBottom: 16, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
                     Vị Trí Hiện Tại
@@ -231,47 +208,6 @@ export default function DriverDetailPage() {
                   <div style={{ marginBottom: 24 }}>
                     <DriverLocationCard driverId={Number(data.driverId ?? id)} />
                   </div>
-
-                  <h4 style={{ marginBottom: 16, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
-                    Giấy Phép Lái Xe & Giấy Tờ
-                  </h4>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-                    <div className="input-group">
-                      <label>Số GPLX</label>
-                      <input type="text" className="input" value={data.licenseNumber} readOnly />
-                    </div>
-                    <div className="input-group">
-                      <label>Hạng bằng</label>
-                      <input type="text" className="input" value={data.licenseClass || 'Chưa cập nhật'} readOnly />
-                    </div>
-                  </div>
-
-                  {data.documents && data.documents.length > 0 ? (
-                    <div style={{ marginBottom: 24 }}>
-                      <label style={{ display: 'block', marginBottom: 8, fontSize: 13, color: 'var(--text-muted)' }}>Hồ sơ tài liệu đính kèm:</label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {data.documents.map((doc: any) => (
-                          <div key={doc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
-                            <div>
-                              <strong style={{ color: 'var(--text-primary)', marginRight: 10 }}>{doc.documentType}</strong>
-                              <Badge type={doc.verificationStatus === 'Approved' ? 'success' : doc.verificationStatus === 'Pending' ? 'warning' : 'danger'}>
-                                {doc.verificationStatus}
-                              </Badge>
-                            </div>
-                            {doc.fileUrl && (
-                              <a href={doc.fileUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" style={{ color: 'var(--accent)' }}>
-                                Xem tệp ↗
-                              </a>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ padding: 12, background: 'var(--bg-secondary)', borderRadius: 8, marginBottom: 24, color: 'var(--text-muted)', fontSize: 13 }}>
-                      Chưa có giấy tờ đính kèm nào được tải lên.
-                    </div>
-                  )}
 
                   <h4 style={{ marginBottom: 16, color: 'var(--text-primary)', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
                     Bảo Mật & Mật Khẩu

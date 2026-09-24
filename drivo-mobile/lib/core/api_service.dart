@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ── Model classes ──────────────────────────────────────────────
@@ -462,6 +463,11 @@ class DriverProfile {
   final int totalTrips;
   final double totalEarnings;
   final bool isFirstLogin;
+  /// Đã sửa GPLX/CCCD/tài khoản nhận tiền hoặc tải giấy tờ mới -> chờ DRIVO duyệt lại.
+  final bool profileReviewPending;
+  final List<DriverDoc> documents;
+  /// Toàn bộ JSON hồ sơ (ngày sinh, CCCD, liên hệ khẩn cấp, ngân hàng...) để đổ vào form.
+  final Map<String, dynamic> raw;
 
   DriverProfile({
     required this.driverId, required this.fullName, required this.phone,
@@ -469,15 +475,16 @@ class DriverProfile {
     required this.verificationStatus, required this.driverStatus,
     required this.ratingAverage, required this.totalTrips,
     required this.totalEarnings, required this.isFirstLogin,
+    this.profileReviewPending = false, this.documents = const [], this.raw = const {},
   });
 
   factory DriverProfile.fromJson(Map<String, dynamic> j) => DriverProfile(
     driverId: j['driverId'],
-    fullName: j['fullName'],
-    phone: j['phone'],
+    fullName: j['fullName'] ?? '',
+    phone: j['phone'] ?? '',
     email: j['email'],
     avatarUrl: j['avatarUrl'],
-    licenseNumber: j['licenseNumber'],
+    licenseNumber: j['licenseNumber'] ?? '',
     licenseClass: j['licenseClass'],
     verificationStatus: j['verificationStatus'],
     driverStatus: j['driverStatus'],
@@ -485,7 +492,35 @@ class DriverProfile {
     totalTrips: j['totalTrips'],
     totalEarnings: (j['totalEarnings'] as num).toDouble(),
     isFirstLogin: j['isFirstLogin'] ?? false,
+    profileReviewPending: j['profileReviewPending'] ?? false,
+    documents: ((j['documents'] as List?) ?? []).map((x) => DriverDoc.fromJson(x)).toList(),
+    raw: j,
   );
+
+  DriverDoc? doc(String type) {
+    for (final d in documents) {
+      if (d.documentType == type) return d;
+    }
+    return null;
+  }
+}
+
+class DriverDoc {
+  final int id;
+  final String documentType;
+  final String fileUrl;
+  /// Pending | Approved | Rejected
+  final String verificationStatus;
+  final String? rejectionReason;
+
+  DriverDoc.fromJson(Map<String, dynamic> j)
+      : id = _toI(j['id']) ?? 0,
+        documentType = j['documentType'] ?? '',
+        fileUrl = j['fileUrl'] ?? '',
+        verificationStatus = j['verificationStatus'] ?? 'Pending',
+        rejectionReason = j['rejectionReason'];
+
+  String get fullUrl => ApiService.fileUrl(fileUrl);
 }
 
 
@@ -884,6 +919,27 @@ class ApiService {
 
   // Driver
   static Future<Map<String, dynamic>> getDriverProfile() => get('/driver/profile');
+
+  /// Đường dẫn file do API trả về ("/uploads/...") -> URL đầy đủ.
+  static String fileUrl(String path) {
+    if (path.startsWith('http')) return path;
+    return '${baseUrl.replaceFirst(RegExp(r'/api/v1$'), '')}$path';
+  }
+
+  /// Tải ảnh giấy tờ (DRIVER_LICENSE_FRONT | DRIVER_LICENSE_BACK | CCCD_FRONT | CCCD_BACK | PROFILE_PHOTO).
+  static Future<Map<String, dynamic>> uploadDriverDocument(
+      String documentType, List<int> bytes, String fileName, String mimeType) async {
+    final parts = mimeType.split('/');
+    Future<http.Response> send() async {
+      final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/driver/documents'))
+        ..fields['documentType'] = documentType
+        ..files.add(http.MultipartFile.fromBytes('file', bytes,
+            filename: fileName, contentType: MediaType(parts.first, parts.length > 1 ? parts[1] : 'jpeg')));
+      if (_token != null) req.headers['Authorization'] = 'Bearer $_token';
+      return http.Response.fromStream(await req.send());
+    }
+    return _decode(await _send(send));
+  }
   static Future<Map<String, dynamic>> updateDriverProfile(Map<String, dynamic> data) => put('/driver/profile', data);
   static Future<Map<String, dynamic>> changePassword(String current, String newPw) =>
       post('/driver/change-password', {'currentPassword': current, 'newPassword': newPw});

@@ -90,6 +90,11 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             .Property(d => d.DriverStatus)
             .HasConversion<string>();
 
+        // CK_DriverDocuments_Status: 'PENDING' | 'APPROVED' | 'REJECTED' (mặc định EF lưu số -> bị DB từ chối)
+        modelBuilder.Entity<DriverDocument>()
+            .Property(d => d.VerificationStatus)
+            .HasConversion(v => v.ToString().ToUpperInvariant(), v => Enum.Parse<VerificationStatus>(v, true));
+
         modelBuilder.Entity<Booking>()
             .Property(b => b.Status)
             .HasConversion(

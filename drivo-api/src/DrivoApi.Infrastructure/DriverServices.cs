@@ -115,6 +115,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
 
         driver.VerificationStatus = newStatus;
         driver.UpdatedAt = DateTime.UtcNow;
+        if (newStatus == VerificationStatus.Approved) driver.ProfileReviewPending = false;
 
         // Nếu bị từ chối → DriverStatus = Offline
         if (newStatus == VerificationStatus.Rejected)
@@ -153,18 +154,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
 
     public async Task<BaseResponse<DriverDetailResponse>> GetDriverByIdAsync(int driverId)
     {
-        var driver = await db.Drivers
-            .Include(d => d.User)
-            .Include(d => d.Documents)
-            .Include(d => d.StatusHistory)
-            .Include(d => d.Bookings)
-                .ThenInclude(b => b.Customer)
-                    .ThenInclude(c => c.User)
-            .Include(d => d.Ratings)
-                .ThenInclude(r => r.Customer)
-                    .ThenInclude(c => c.User)
-            .FirstOrDefaultAsync(d => d.Id == driverId);
-
+        var driver = await LoadDetailAsync(driverId);
         if (driver == null)
             return BaseResponse<DriverDetailResponse>.Fail("Không tìm thấy tài xế.");
 
@@ -213,12 +203,80 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
                 LicenseNumber = d.LicenseNumber,
                 VerificationStatus = d.VerificationStatus.ToString(),
                 DriverStatus = d.DriverStatus.ToString(),
-                  AccountStatus = d.User.Status.ToString(),
+                AccountStatus = d.User.Status.ToString(),
+                ProfileReviewPending = d.ProfileReviewPending,
+                LicenseExpiryDate = d.LicenseExpiryDate,
+                LicenseClass = d.LicenseClass,
+                Email = d.User.Email,
+                PendingDocuments = d.Documents.Count(x => x.VerificationStatus == VerificationStatus.Pending),
                 CreatedAt = d.CreatedAt
             })
             .ToListAsync();
+        foreach (var x in drivers) x.LicenseNumber = DriverProfileEditor.DisplayLicense(x.LicenseNumber);
 
         return BaseResponse<List<DriverListResponse>>.Ok(drivers);
+    }
+
+    private Task<Driver?> LoadDetailAsync(int driverId) => db.Drivers
+        .Include(d => d.User)
+        .Include(d => d.Documents)
+        .Include(d => d.StatusHistory)
+        .Include(d => d.Bookings).ThenInclude(b => b.Customer).ThenInclude(c => c.User)
+        .Include(d => d.Ratings).ThenInclude(r => r.Customer).ThenInclude(c => c.User)
+        .AsSplitQuery()
+        .FirstOrDefaultAsync(d => d.Id == driverId);
+
+    public async Task<BaseResponse<DriverDetailResponse>> UpdateDriverProfileAsync(int driverId, DriverProfileFields req)
+    {
+        var driver = await LoadDetailAsync(driverId);
+        if (driver == null)
+            return BaseResponse<DriverDetailResponse>.Fail("Không tìm thấy tài xế.");
+
+        var (error, _) = await DriverProfileEditor.ApplyAsync(db, driver, req);
+        if (error != null)
+            return BaseResponse<DriverDetailResponse>.Fail(error);
+
+        await db.SaveChangesAsync();
+        return BaseResponse<DriverDetailResponse>.Ok(
+            MapToDetail(driver, driver.User, driver.Documents.ToList()), "Đã cập nhật hồ sơ tài xế.");
+    }
+
+    public async Task<BaseResponse<DriverDetailResponse>> ReviewDocumentAsync(
+        int driverId, int documentId, ReviewDocumentRequest req, int adminUserId)
+    {
+        if (!Enum.TryParse<VerificationStatus>(req.Status, true, out var status) ||
+            status is not (VerificationStatus.Approved or VerificationStatus.Rejected))
+            return BaseResponse<DriverDetailResponse>.Fail("Status phải là APPROVED hoặc REJECTED.");
+        if (status == VerificationStatus.Rejected && string.IsNullOrWhiteSpace(req.RejectionReason))
+            return BaseResponse<DriverDetailResponse>.Fail("Vui lòng nhập lý do từ chối để tài xế biết cần chụp lại gì.");
+
+        var driver = await LoadDetailAsync(driverId);
+        var doc = driver?.Documents.FirstOrDefault(x => x.Id == documentId);
+        if (driver == null || doc == null)
+            return BaseResponse<DriverDetailResponse>.Fail("Không tìm thấy giấy tờ.");
+
+        doc.VerificationStatus = status;
+        doc.RejectionReason = status == VerificationStatus.Rejected ? req.RejectionReason!.Trim() : null;
+        doc.VerifiedBy = adminUserId;
+        doc.VerifiedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+
+        return BaseResponse<DriverDetailResponse>.Ok(
+            MapToDetail(driver, driver.User, driver.Documents.ToList()),
+            status == VerificationStatus.Approved ? "Đã duyệt giấy tờ." : "Đã từ chối giấy tờ.");
+    }
+
+    public async Task<BaseResponse<DriverDetailResponse>> CompleteProfileReviewAsync(int driverId)
+    {
+        var driver = await LoadDetailAsync(driverId);
+        if (driver == null)
+            return BaseResponse<DriverDetailResponse>.Fail("Không tìm thấy tài xế.");
+
+        driver.ProfileReviewPending = false;
+        driver.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        return BaseResponse<DriverDetailResponse>.Ok(
+            MapToDetail(driver, driver.User, driver.Documents.ToList()), "Đã xác nhận xem lại hồ sơ.");
     }
 
     public async Task<BaseResponse<bool>> SetDriverAccountStatusAsync(
@@ -256,8 +314,11 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         Phone = u.Phone,
         Email = u.Email,
         AvatarUrl = u.AvatarUrl,
-        LicenseNumber = d.LicenseNumber,
+        LicenseNumber = DriverProfileEditor.DisplayLicense(d.LicenseNumber),
         LicenseClass = d.LicenseClass,
+        Profile = ProfileOf(d),
+        ProfileReviewPending = d.ProfileReviewPending,
+        ProfileUpdatedAt = d.ProfileUpdatedAt,
         VerificationStatus = d.VerificationStatus.ToString(),
         DriverStatus = d.DriverStatus.ToString(),
         AccountStatus = d.User.Status.ToString(),
@@ -310,6 +371,13 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
             }).ToList()
     };
 
+    private static DriverProfileFields ProfileOf(Driver d)
+    {
+        var p = new DriverProfileFields();
+        DriverProfileEditor.Fill(p, d);
+        return p;
+    }
+
     private static DriverDocumentDto MapToDocDto(DriverDocument doc) => new()
     {
         Id = doc.Id,
@@ -317,6 +385,7 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         FileUrl = doc.FileUrl,
         VerificationStatus = doc.VerificationStatus.ToString(),
         RejectionReason = doc.RejectionReason,
+        VerifiedAt = doc.VerifiedAt,
         CreatedAt = doc.CreatedAt
     };
 
@@ -334,12 +403,14 @@ public class DriverProfileService(DrivoDbContext db) : IDriverProfileService
 {
     private const int Pbkdf2Iterations = 350_000;
 
+    private Task<Driver?> LoadDriverAsync(int userId) => db.Drivers
+        .Include(d => d.User)
+        .Include(d => d.Documents)
+        .FirstOrDefaultAsync(d => d.UserId == userId);
+
     public async Task<BaseResponse<DriverProfileResponse>> GetMyProfileAsync(int userId)
     {
-        var driver = await db.Drivers
-            .Include(d => d.User)
-            .FirstOrDefaultAsync(d => d.UserId == userId);
-
+        var driver = await LoadDriverAsync(userId);
         if (driver == null)
             return BaseResponse<DriverProfileResponse>.Fail("Không tìm thấy hồ sơ tài xế.");
 
@@ -349,39 +420,55 @@ public class DriverProfileService(DrivoDbContext db) : IDriverProfileService
     public async Task<BaseResponse<DriverProfileResponse>> UpdateProfileAsync(
         int userId, UpdateDriverProfileRequest req)
     {
-        var driver = await db.Drivers
-            .Include(d => d.User)
-            .FirstOrDefaultAsync(d => d.UserId == userId);
-
+        var driver = await LoadDriverAsync(userId);
         if (driver == null)
             return BaseResponse<DriverProfileResponse>.Fail("Không tìm thấy hồ sơ tài xế.");
 
-        // Validate email unique nếu đổi email
-        if (!string.IsNullOrEmpty(req.Email) && req.Email != driver.User.Email)
-        {
-            if (await db.Users.AnyAsync(u => u.Email == req.Email && u.Id != userId && !u.IsDeleted))
-                return BaseResponse<DriverProfileResponse>.Fail("Email đã được sử dụng.");
-            driver.User.Email = req.Email.Trim().ToLower();
-        }
+        var (error, sensitive) = await DriverProfileEditor.ApplyAsync(db, driver, req);
+        if (error != null)
+            return BaseResponse<DriverProfileResponse>.Fail(error);
+        if (!string.IsNullOrWhiteSpace(req.AvatarUrl)) driver.User.AvatarUrl = req.AvatarUrl.Trim();
 
-        // Validate GPLX unique nếu đổi
-        if (!string.IsNullOrEmpty(req.LicenseNumber) && req.LicenseNumber != driver.LicenseNumber)
-        {
-            if (await db.Drivers.AnyAsync(d => d.LicenseNumber == req.LicenseNumber && d.Id != driver.Id))
-                return BaseResponse<DriverProfileResponse>.Fail("Số GPLX đã tồn tại trong hệ thống.");
-            driver.LicenseNumber = req.LicenseNumber.Trim();
-        }
+        // Đã được duyệt mà đổi GPLX / CCCD / ngày sinh / tài khoản nhận tiền -> admin xem lại (vẫn chạy được)
+        var needReview = sensitive && driver.VerificationStatus == VerificationStatus.Approved;
+        if (needReview) driver.ProfileReviewPending = true;
 
-        if (!string.IsNullOrEmpty(req.FullName)) driver.User.FullName = req.FullName.Trim();
-        if (!string.IsNullOrEmpty(req.LicenseClass)) driver.LicenseClass = req.LicenseClass.Trim();
-        if (!string.IsNullOrEmpty(req.AvatarUrl)) driver.User.AvatarUrl = req.AvatarUrl.Trim();
-
-        driver.User.UpdatedAt = DateTime.UtcNow;
-        driver.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
+        return BaseResponse<DriverProfileResponse>.Ok(MapToProfile(driver), needReview
+            ? "Đã lưu. Thông tin giấy tờ/tài khoản nhận tiền thay đổi sẽ được DRIVO duyệt lại."
+            : "Cập nhật thông tin thành công!");
+    }
 
-        return BaseResponse<DriverProfileResponse>.Ok(
-            MapToProfile(driver), "Cập nhật thông tin thành công!");
+    public async Task<BaseResponse<DriverProfileResponse>> UploadDocumentAsync(int userId, string documentType, string fileUrl)
+    {
+        if (!DriverDocumentTypes.Required.Contains(documentType))
+            return BaseResponse<DriverProfileResponse>.Fail("Loại giấy tờ không hợp lệ.");
+
+        var driver = await LoadDriverAsync(userId);
+        if (driver == null)
+            return BaseResponse<DriverProfileResponse>.Fail("Không tìm thấy hồ sơ tài xế.");
+
+        // Mỗi loại chỉ giữ 1 ảnh mới nhất, chờ admin duyệt
+        foreach (var old in driver.Documents.Where(x => x.DocumentType == documentType).ToList())
+            db.DriverDocuments.Remove(old);
+
+        var now = DateTime.UtcNow;
+        db.DriverDocuments.Add(new DriverDocument
+        {
+            DriverId = driver.Id,
+            DocumentType = documentType,
+            FileUrl = fileUrl,
+            VerificationStatus = VerificationStatus.Pending,
+            CreatedAt = now
+        });
+        if (documentType == DriverDocumentTypes.Portrait) driver.User.AvatarUrl = fileUrl;
+        if (driver.VerificationStatus == VerificationStatus.Approved) driver.ProfileReviewPending = true;
+        driver.ProfileUpdatedAt = now;
+        driver.UpdatedAt = now;
+
+        await db.SaveChangesAsync();
+        await db.Entry(driver).Collection(d => d.Documents).LoadAsync();
+        return BaseResponse<DriverProfileResponse>.Ok(MapToProfile(driver), "Đã tải ảnh lên, chờ DRIVO duyệt.");
     }
 
     public async Task<BaseResponse<bool>> ChangePasswordAsync(
@@ -404,25 +491,28 @@ public class DriverProfileService(DrivoDbContext db) : IDriverProfileService
     }
 
     // ── Helpers ─────────────────────────────────────────────
-    private static DriverProfileResponse MapToProfile(Driver d) => new()
+    private static DriverProfileResponse MapToProfile(Driver d)
     {
-        DriverId = d.Id,
-        FullName = d.User.FullName,
-        Phone = d.User.Phone,
-        Email = d.User.Email,
-        AvatarUrl = d.User.AvatarUrl,
-        LicenseNumber = d.LicenseNumber,
-        LicenseClass = d.LicenseClass,
-        VerificationStatus = d.VerificationStatus.ToString(),
-        DriverStatus = d.DriverStatus.ToString(),
-                  AccountStatus = d.User.Status.ToString(),
-        RatingAverage = d.RatingAverage,
-        TotalTrips = d.TotalTrips,
-        TotalEarnings = d.TotalEarnings,
-        CreatedAt = d.CreatedAt,
-        // FirstLogin: nếu LastLoginAt null = chưa từng đăng nhập (mật khẩu vẫn là mặc định)
-        IsFirstLogin = d.User.LastLoginAt == null
-    };
+        var res = new DriverProfileResponse
+        {
+            DriverId = d.Id,
+            Phone = d.User.Phone,
+            AvatarUrl = d.User.AvatarUrl,
+            ProfileReviewPending = d.ProfileReviewPending,
+            Documents = d.Documents.OrderBy(x => x.DocumentType).Select(DriverProfileEditor.MapDocument).ToList(),
+            VerificationStatus = d.VerificationStatus.ToString(),
+            DriverStatus = d.DriverStatus.ToString(),
+            AccountStatus = d.User.Status.ToString(),
+            RatingAverage = d.RatingAverage,
+            TotalTrips = d.TotalTrips,
+            TotalEarnings = d.TotalEarnings,
+            CreatedAt = d.CreatedAt,
+            // FirstLogin: nếu LastLoginAt null = chưa từng đăng nhập (mật khẩu vẫn là mặc định)
+            IsFirstLogin = d.User.LastLoginAt == null
+        };
+        DriverProfileEditor.Fill(res, d);
+        return res;
+    }
 
     private static string HashPassword(string password)
     {

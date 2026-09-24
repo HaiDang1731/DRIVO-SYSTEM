@@ -1,6 +1,33 @@
 // API service layer for DRIVO Admin
 export const BASE_URL = 'http://localhost:5270/api/v1';
 
+/** Đường dẫn file do API trả về ("/uploads/...") -> URL đầy đủ. */
+export function apiFileUrl(path?: string | null): string {
+  if (!path) return '';
+  if (/^https?:\/\//.test(path)) return path;
+  return BASE_URL.replace(/\/api\/v1$/, '') + path;
+}
+
+/** Hồ sơ tài xế (khớp DriverProfileFields ở backend). */
+export interface DriverProfileFields {
+  fullName?: string | null;
+  email?: string | null;
+  dateOfBirth?: string | null; // yyyy-MM-dd
+  gender?: 'MALE' | 'FEMALE' | 'OTHER' | string | null;
+  address?: string | null;
+  idCardNumber?: string | null;
+  licenseNumber?: string | null;
+  licenseClass?: string | null;
+  licenseExpiryDate?: string | null; // yyyy-MM-dd
+  drivingExperienceYears?: number | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  emergencyContactRelation?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  bankAccountHolder?: string | null;
+}
+
 // ── Typed DTOs (camelCase, see maps-contract.md) ──
 export interface ApiResponse<T> {
   success: boolean;
@@ -184,6 +211,19 @@ export const api = {
     api.request(`/admin/drivers?${status ? `verificationStatus=${status}&` : ''}page=${page}&pageSize=${pageSize}`),
 
   getDriver: (id: string | number) => api.request(`/admin/drivers/${id}`),
+
+  /** Sửa hồ sơ tài xế: chỉ gửi trường cần đổi (chuỗi rỗng = xóa) */
+  updateDriverProfile: (id: string | number, data: Partial<DriverProfileFields>) =>
+    api.request(`/admin/drivers/${id}/profile`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  reviewDriverDocument: (id: string | number, documentId: number, status: 'APPROVED' | 'REJECTED', rejectionReason?: string) =>
+    api.request(`/admin/drivers/${id}/documents/${documentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, rejectionReason }),
+    }),
+
+  completeDriverReview: (id: string | number) =>
+    api.request(`/admin/drivers/${id}/review-complete`, { method: 'POST' }),
 
   createDriver: (data: object) =>
     api.request('/admin/drivers', { method: 'POST', body: JSON.stringify(data) }),

@@ -102,6 +102,16 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("DrivoCors");
+
+// Ảnh giấy tờ / chân dung tài xế: wwwroot/uploads/... (tên file ngẫu nhiên, không liệt kê thư mục)
+var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+Directory.CreateDirectory(Path.Combine(webRoot, "uploads"));
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(webRoot),
+    OnPrepareResponse = ctx => ctx.Context.Response.Headers.Append("Access-Control-Allow-Origin", "*")
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

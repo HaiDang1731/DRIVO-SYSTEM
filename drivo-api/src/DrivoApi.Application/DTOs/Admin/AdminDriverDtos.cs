@@ -57,6 +57,10 @@ public class DriverDetailResponse
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public List<DriverDocumentDto> Documents { get; set; } = [];
+    /// <summary>Hồ sơ đầy đủ: cá nhân + CCCD, GPLX, liên hệ khẩn cấp, tài khoản nhận tiền.</summary>
+    public DrivoApi.Application.DTOs.Driver.DriverProfileFields Profile { get; set; } = new();
+    public bool ProfileReviewPending { get; set; }
+    public DateTime? ProfileUpdatedAt { get; set; }
     public List<DriverStatusHistoryDto> StatusHistory { get; set; } = [];
     public List<DriverTripSummaryDto> Trips { get; set; } = [];
     public List<DriverRatingSummaryDto> Ratings { get; set; } = [];
@@ -101,6 +105,7 @@ public class DriverDocumentDto
     public string FileUrl { get; set; } = null!;
     public string VerificationStatus { get; set; } = null!;
     public string? RejectionReason { get; set; }
+    public DateTime? VerifiedAt { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -115,5 +120,19 @@ public class DriverListResponse
     public string VerificationStatus { get; set; } = null!;
     public string DriverStatus { get; set; } = null!;
     public string AccountStatus { get; set; } = null!;
+    /// <summary>Tài xế đã duyệt vừa sửa thông tin quan trọng / tải giấy tờ mới.</summary>
+    public bool ProfileReviewPending { get; set; }
+    public DateOnly? LicenseExpiryDate { get; set; }
+    public string? LicenseClass { get; set; }
+    public string? Email { get; set; }
+    /// <summary>Số ảnh giấy tờ đang chờ duyệt.</summary>
+    public int PendingDocuments { get; set; }
     public DateTime CreatedAt { get; set; }
+}
+
+public class ReviewDocumentRequest
+{
+    /// <summary>APPROVED | REJECTED</summary>
+    public string Status { get; set; } = null!;
+    public string? RejectionReason { get; set; }
 }

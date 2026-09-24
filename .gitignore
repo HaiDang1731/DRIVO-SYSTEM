@@ -55,3 +55,6 @@ ios/Flutter/Flutter.podspec
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Ảnh giấy tờ / chân dung tài xế tải lên (dữ liệu cá nhân, không commit)
+**/wwwroot/uploads/
