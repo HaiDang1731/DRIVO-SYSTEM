@@ -67,7 +67,8 @@ class CustomerVehicle {
 
 double? _toD(dynamic v) => v == null ? null : (v is num ? v.toDouble() : double.tryParse(v.toString()));
 int? _toI(dynamic v) => v == null ? null : (v is num ? v.toInt() : int.tryParse(v.toString()));
-DateTime? _toDt(dynamic v) => v == null ? null : DateTime.tryParse(v.toString());
+/// Mốc thời gian từ API (UTC) -> giờ máy.
+DateTime? _toDt(dynamic v) => _utcToLocal(v);
 
 class FareEstimate {
   final double estimatedDistanceKm;
@@ -271,7 +272,7 @@ class BookingDetail {
       destinationAddress: j['destinationAddress'],
       estimatedPrice: (j['estimatedPrice'] as num).toDouble(),
       finalPrice: j['finalPrice'] != null ? (j['finalPrice'] as num).toDouble() : null,
-      createdAt: DateTime.parse(j['createdAt']),
+      createdAt: _toDt(j['createdAt']) ?? DateTime.now(),
       vehicleInfo: vInfo,
       driverName: d != null ? d['fullName'] : null,
       driverPhone: d != null ? d['phone'] : null,
@@ -607,7 +608,7 @@ class DriverBooking {
       vehicleModel: v['model'] ?? '',
       vehicleTransmission: v['transmission'] ?? '',
       customerNote: j['customerNote'],
-      createdAt: DateTime.tryParse(j['createdAt'] ?? '') ?? DateTime.now(),
+      createdAt: _toDt(j['createdAt']) ?? DateTime.now(),
     );
   }
 
@@ -872,6 +873,7 @@ class ApiService {
   static Future<Map<String, dynamic>> estimateFare(Map<String, dynamic> data) => post('/bookings/estimate', data);
   static Future<Map<String, dynamic>> createBooking(Map<String, dynamic> data) => post('/bookings', data);
   static Future<Map<String, dynamic>> getAvailableVouchers() => get('/bookings/vouchers');
+  static Future<Map<String, dynamic>> retryDriverSearch(int bookingId) => post('/bookings/$bookingId/retry-search', {});
   static Future<Map<String, dynamic>> checkVoucher(String code, double orderAmount) =>
       post('/bookings/vouchers/check', {'code': code, 'orderAmount': orderAmount});
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');

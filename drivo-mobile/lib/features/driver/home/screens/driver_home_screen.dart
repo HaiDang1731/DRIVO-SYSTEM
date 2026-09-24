@@ -1380,14 +1380,16 @@ class _OfferCountdownState extends State<_OfferCountdown> {
 
   @override
   Widget build(BuildContext context) {
-    final urgent = _left <= 5;
+    final urgent = _left <= 30;
     final color = urgent ? DrivoColors.danger : DrivoColors.primary;
+    final left = _left.clamp(0, 3600);
+    final mmss = '${left ~/ 60}:${(left % 60).toString().padLeft(2, '0')}';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Icon(Icons.timer_outlined, size: 16, color: color),
         const SizedBox(width: 6),
         Expanded(
-          child: Text('Cuốc ưu tiên cho bạn · còn ${_left.clamp(0, 99)} giây',
+          child: Text('Cuốc ưu tiên cho bạn · còn $mmss',
               style: GoogleFonts.inter(color: color, fontSize: 12.5, fontWeight: FontWeight.w700)),
         ),
       ]),

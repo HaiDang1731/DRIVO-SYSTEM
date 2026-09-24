@@ -664,7 +664,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
     //  Hết MaxOfferRounds lượt hoặc không còn ứng viên -> mở cho mọi tài xế trong bán kính.
     //  Không có tiến trình nền: trạng thái được đẩy tiếp mỗi khi tài xế lấy danh sách cuốc (5 giây/lần).
 
-    private static readonly TimeSpan OfferTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan OfferTimeout = TimeSpan.FromMinutes(3);
     private const int MaxOfferRounds = 3;
     /// <summary>Lượt ghi nhận tài xế bấm Bỏ qua khi cuốc đã mở cho mọi người (không tính vào lượt ưu tiên).</summary>
     private const int BroadcastSkipRound = MaxOfferRounds + 1;
@@ -728,7 +728,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
     private async Task<List<BookingDriverOffer>> DispatchAsync(Booking b)
     {
         var now = DateTime.UtcNow;
-        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id).ToListAsync();
+        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id && o.OfferRound <= BroadcastSkipRound).ToListAsync();
 
         var stale = offers.Where(o => o.OfferStatus == OfferStatus.Sent && o.SentAt + OfferTimeout <= now).Select(o => o.Id).ToList();
         if (stale.Count > 0)
@@ -767,7 +767,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         {
             // Tài xế khác lấy danh sách cùng lúc đã tạo đúng offer này (UQ Booking+Driver+Round)
             db.Entry(offer).State = EntityState.Detached;
-            offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id).ToListAsync();
+            offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == b.Id && o.OfferRound <= BroadcastSkipRound).ToListAsync();
         }
         return offers;
     }
@@ -840,7 +840,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .Where(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent)
             .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Rejected).SetProperty(o => o.RespondedAt, now));
 
-        if (rejected == 0 && !await db.BookingDriverOffers.AnyAsync(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Rejected))
+        if (rejected == 0 && !await db.BookingDriverOffers.AnyAsync(o => o.BookingId == bookingId && o.DriverId == driver.Id && o.OfferRound <= BroadcastSkipRound && o.OfferStatus == OfferStatus.Rejected))
         {
             // Cuốc đang mở cho mọi người: ghi nhận để không hiện lại cho tài xế này
             var skip = new BookingDriverOffer
@@ -864,6 +864,34 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         return BaseResponse<bool>.Ok(true, "Đã bỏ qua cuốc.");
     }
 
+    /// <summary>
+    /// Khách bấm "Làm mới" khi chờ lâu: bắt đầu lượt tìm mới từ lượt 1 (gồm cả tài xế vừa trực tuyến
+    /// và người đã bỏ qua). Offer cũ được dời sang số lượt +10 để giữ lịch sử mà không tính vào lượt tìm mới.
+    /// </summary>
+    public async Task<BaseResponse<bool>> RetrySearchAsync(long bookingId, int userId)
+    {
+        var customer = await db.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.UserId == userId);
+        var booking = customer == null ? null : await db.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId && b.CustomerId == customer.Id);
+        if (booking == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy chuyến đi.");
+        if (booking.Status != BookingStatus.SearchingDriver || booking.DriverId != null)
+            return BaseResponse<bool>.Fail("Chuyến đi không còn ở trạng thái tìm tài xế.");
+
+        var now = DateTime.UtcNow;
+        await db.BookingDriverOffers
+            .Where(o => o.BookingId == bookingId && o.OfferStatus == OfferStatus.Sent)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferStatus, OfferStatus.Cancelled).SetProperty(o => o.RespondedAt, now));
+        await db.BookingDriverOffers
+            .Where(o => o.BookingId == bookingId)
+            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OfferRound, o => o.OfferRound + 10));
+
+        var offers = await DispatchAsync(booking);
+        var active = ActiveOffer(offers, DateTime.UtcNow);
+        return BaseResponse<bool>.Ok(true, active != null
+            ? "Đã tìm lại, đang gửi yêu cầu cho tài xế gần bạn."
+            : "Đã tìm lại. Hiện chưa có tài xế trực tuyến gần bạn.");
+    }
+
     public async Task<BaseResponse<BookingDetailResponse>> AcceptBookingAsync(long bookingId, int userId)
     {
         var driver = await db.Drivers.FirstOrDefaultAsync(d => d.UserId == userId);
@@ -884,7 +912,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var now = DateTime.UtcNow;
 
         // Đang trong lượt ưu tiên của tài xế khác thì chưa được nhận (cho thêm 3 giây bù độ trễ mạng)
-        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == bookingId).ToListAsync();
+        var offers = await db.BookingDriverOffers.AsNoTracking().Where(o => o.BookingId == bookingId && o.OfferRound <= BroadcastSkipRound).ToListAsync();
         if (offers.Any(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Rejected))
             return BaseResponse<BookingDetailResponse>.Fail("Bạn đã bỏ qua cuốc này.");
         var mine = offers.FirstOrDefault(o => o.DriverId == driver.Id && o.OfferStatus == OfferStatus.Sent &&

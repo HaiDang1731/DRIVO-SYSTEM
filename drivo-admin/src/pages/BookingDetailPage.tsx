@@ -265,8 +265,8 @@ export function BookingDetailPage() {
         <div className="card" style={{ marginTop: 20, padding: 0 }}>
           <h3 className="section-title" style={{ padding: '20px 20px 0' }}>Lịch sử gửi cuốc cho tài xế</h3>
           <p style={{ padding: '0 20px', margin: '6px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-            Cuốc được gửi lần lượt cho tài xế điểm cao nhất (gần + sao + tỉ lệ hoàn thành), mỗi người 15 giây.
-            Sau 3 lượt chưa ai nhận thì mở cho mọi tài xế gần đó.
+            Cuốc được gửi lần lượt cho tài xế điểm cao nhất (gần + sao + tỉ lệ hoàn thành), mỗi người 3 phút.
+            Sau 3 lượt chưa ai nhận thì mở cho mọi tài xế gần đó. Khách bấm "Làm mới" thì tìm lại từ lượt 1.
           </p>
           <div className="table-responsive">
             <table className="table">
@@ -285,7 +285,9 @@ export function BookingDetailPage() {
                   const r = result[o.status] ?? { label: o.status, type: 'info' as const };
                   return (
                     <tr key={i}>
-                      <td>{o.round <= 3 ? `#${o.round}` : 'Mở chung'}</td>
+                      <td>
+                        {(o.round % 10 <= 3 ? `#${o.round % 10}` : 'Mở chung') + (o.round > 10 ? ' (lần tìm trước)' : '')}
+                      </td>
                       <td><Link to={`/drivers/${o.driverId}`}>{o.driverName}</Link></td>
                       <td>{o.distanceToPickupKm != null ? formatKm(o.distanceToPickupKm) : '—'}</td>
                       <td><Badge type={r.type}>{r.label}</Badge></td>

@@ -58,6 +58,15 @@ public class BookingController(IBookingService bookingService) : ControllerBase
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    /// <summary>Khách chờ lâu bấm "Làm mới": tìm tài xế lại từ đầu</summary>
+    [HttpPost("{id:long}/retry-search")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> RetrySearch(long id)
+    {
+        var result = await bookingService.RetrySearchAsync(id, CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Lịch sử chuyến đi của khách</summary>
     [HttpGet("customer-history")]
     [Authorize(Roles = "CUSTOMER")]

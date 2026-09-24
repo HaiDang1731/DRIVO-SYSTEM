@@ -125,6 +125,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   @override
   void dispose() {
     _radarController.dispose();
+    _searchTicker?.cancel();
     _pollingTimer?.cancel();
     _locSub?.cancel();
     _statusSub?.cancel();
@@ -506,6 +507,129 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     }
   }
 
+  // ── Chờ tài xế quá lâu ──────────────────────────────────────
+  static const Duration _searchWaitLimit = Duration(minutes: 5);
+  /// Sau mốc này mới hiện thông báo "không tìm được tài xế" (đẩy lùi khi khách bấm Đợi thêm / Làm mới).
+  DateTime? _noDriverNoticeAfter;
+  bool _retryingSearch = false;
+  Timer? _searchTicker;
+
+  bool _isSearching(BookingDetail b) => b.status == 'SearchingDriver' || b.status == 'Pending';
+
+  /// Cập nhật giao diện mỗi 10 giây khi đang tìm tài xế (thời gian đã chờ + thông báo); tự dừng khi hết tìm.
+  void _ensureSearchTicker() {
+    if (_searchTicker != null) return;
+    _searchTicker = Timer.periodic(const Duration(seconds: 10), (t) {
+      if (!mounted) return t.cancel();
+      final b = _activeBooking;
+      if (b == null || !_isSearching(b)) {
+        t.cancel();
+        _searchTicker = null;
+        _noDriverNoticeAfter = null;
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  String _searchElapsedText(BookingDetail b) {
+    final min = DateTime.now().difference(b.createdAt).inMinutes;
+    return min >= 1 ? ' (đã tìm $min phút)' : '';
+  }
+
+  bool _showNoDriverNotice(BookingDetail b) {
+    if (!_isSearching(b)) return false;
+    final after = _noDriverNoticeAfter ?? b.createdAt.add(_searchWaitLimit);
+    return DateTime.now().isAfter(after);
+  }
+
+  Future<void> _retryDriverSearch(BookingDetail b) async {
+    if (_retryingSearch) return;
+    setState(() => _retryingSearch = true);
+    Map<String, dynamic> res;
+    try {
+      res = await ApiService.retryDriverSearch(b.id);
+    } catch (_) {
+      res = {'success': false, 'message': 'Không kết nối được máy chủ, vui lòng thử lại.'};
+    }
+    if (!mounted) return;
+    setState(() {
+      _retryingSearch = false;
+      if (res['success'] == true) _noDriverNoticeAfter = DateTime.now().add(_searchWaitLimit);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['message']?.toString() ?? 'Đã tìm lại tài xế'),
+      backgroundColor: res['success'] == true ? const Color(0xFF0070E0) : const Color(0xFFE53935),
+    ));
+  }
+
+  Widget _buildNoDriverNotice(BookingDetail b) {
+    final buttonStyle = ButtonStyle(
+      // Theme đặt minimumSize width = infinity -> nút trong Row phải tự đặt lại
+      minimumSize: WidgetStateProperty.all(const Size(0, 40)),
+      padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 12)),
+      shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDBA74)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.info_outline_rounded, color: Color(0xFFEA580C), size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Không tìm được tài xế, vui lòng đợi thêm hoặc làm mới',
+                  style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: const Color(0xFF9A3412)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  style: buttonStyle.copyWith(
+                    side: WidgetStateProperty.all(const BorderSide(color: Color(0xFFFDBA74))),
+                  ),
+                  onPressed: _retryingSearch
+                      ? null
+                      : () => setState(() => _noDriverNoticeAfter = DateTime.now().add(_searchWaitLimit)),
+                  child: Text('Đợi thêm',
+                      style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: const Color(0xFF9A3412))),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  style: buttonStyle.copyWith(
+                    backgroundColor: WidgetStateProperty.all(const Color(0xFFEA580C)),
+                    elevation: WidgetStateProperty.all(0),
+                  ),
+                  onPressed: _retryingSearch ? null : () => _retryDriverSearch(b),
+                  child: _retryingSearch
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : Text('Làm mới',
+                          style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Đóng hộp đánh giá và màn đặt xe, quay về Home.
   void _closeAfterTrip(BuildContext sheetContext) {
     Navigator.pop(sheetContext);
@@ -530,7 +654,8 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             color: Color(0xFF1E293B),
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
-          child: Padding(
+          // Bàn phím mở -> nội dung cao hơn chỗ trống, phải cuộn được (trước bị tràn).
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1704,6 +1829,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   // ── Active Booking Tracking Sheet ───────────────────────────
   Widget _buildActiveBookingTrackingSheet() {
     final b = _activeBooking!;
+    if (_isSearching(b)) _ensureSearchTicker();
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1851,12 +1977,16 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Đang liên hệ tài xế gần bạn nhất...',
+                        'Đang liên hệ tài xế gần bạn nhất...${_searchElapsedText(b)}',
                         style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF475569)),
                       ),
                     ),
                   ],
                 ),
+                if (_showNoDriverNotice(b)) ...[
+                  const SizedBox(height: 12),
+                  _buildNoDriverNotice(b),
+                ],
               ],
               const SizedBox(height: 14),
 

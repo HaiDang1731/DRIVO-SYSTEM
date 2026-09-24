@@ -22,6 +22,7 @@ public interface IBookingService
     Task<BaseResponse<List<BookingDetailResponse>>> GetPendingBookingsAsync(int userId);
     Task<BaseResponse<BookingDetailResponse>> AcceptBookingAsync(long bookingId, int userId);
     Task<BaseResponse<bool>> RejectBookingAsync(long bookingId, int userId);
+    Task<BaseResponse<bool>> RetrySearchAsync(long bookingId, int userId);
     Task<BaseResponse<BookingDetailResponse>> UpdateBookingStatusAsync(long bookingId, int userId, string newStatus);
     Task<BaseResponse<BookingDetailResponse?>> GetDriverActiveBookingAsync(int userId);
     Task<BaseResponse<List<BookingDetailResponse>>> GetDriverBookingHistoryAsync(int userId, int page, int pageSize);
