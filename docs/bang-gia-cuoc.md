@@ -108,12 +108,16 @@ Giá cuối = Cước chặng chính + Phí đón + Phí chờ + Phí vượt qu
 ## 6. Chia doanh thu: nền tảng và tài xế
 
 ```
-Hoa hồng DRIVO    = Giá cuối × Hoa hồng %     (làm tròn 1.000đ)
-Tài xế thực nhận  = Giá cuối − Hoa hồng DRIVO
+Giá trước giảm    = Giá cuối + Giảm giá
+Hoa hồng DRIVO    = Giá trước giảm × Hoa hồng %     (làm tròn 1.000đ)
+Tài xế thực nhận  = Giá trước giảm − Hoa hồng DRIVO
+DRIVO thực thu    = Giá cuối − Tài xế thực nhận  (= Hoa hồng − Giảm giá, có thể âm)
 ```
 
+**Tiền voucher do DRIVO chịu toàn bộ.** Tài xế luôn nhận đủ như khi khách không dùng mã. Khi khách trả tiền mặt, tài xế thu *Giá cuối* rồi được DRIVO bù phần giảm giá.
+
 - **Hoa hồng %** được đặt riêng cho từng loại xe, hiện đều là **15%**.
-- Hoa hồng tính trên **toàn bộ giá cuối**, gồm cả phí đón, phí chờ và phí vượt quãng đường. Vì giá cuối đã trừ voucher, **tiền giảm giá do cả nền tảng và tài xế cùng chịu** theo đúng tỉ lệ hoa hồng.
+- Hoa hồng tính trên **toàn bộ giá trước giảm**, gồm cả phí đón, phí chờ và phí vượt quãng đường.
 - **Mục đích:** nền tảng có doanh thu để vận hành (xe điện gấp, bảo hiểm, máy chủ, chăm sóc khách hàng). Tài xế giữ phần lớn tiền cước.
 - Thu nhập tài xế trong app và ở trang admin (*Thống kê thu nhập*) là phần **thực nhận**, không phải toàn bộ giá cuối.
 

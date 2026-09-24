@@ -124,7 +124,11 @@ export function BookingDetailPage() {
     { label: 'Giảm giá (Discount)', value: data.discount, negative: true },
     { label: 'Giá cuối cùng (FinalPrice)', value: data.finalPrice, strong: true },
     ...(data.finalPrice != null ? [
-      { label: 'Hoa hồng nền tảng DRIVO (CommissionAmount)', value: data.commissionAmount, negative: true },
+      {
+        label: 'DRIVO thực thu (CommissionAmount)',
+        value: data.commissionAmount,
+        note: data.discount ? `hoa hồng ${formatVND((data.commissionAmount ?? 0) + data.discount)} − bù khuyến mãi ${formatVND(data.discount)}` : undefined,
+      },
       { label: 'Tài xế thực nhận (DriverPayout)', value: data.driverPayout, strong: true },
     ] : []),
   ];

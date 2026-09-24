@@ -872,9 +872,11 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         booking.FinalPrice = Math.Max(0m,
             booking.EstimatedPrice + booking.PickupFee + booking.WaitingFee + booking.ExtraDistanceFee - booking.Discount);
 
-        // Chia doanh thu: nền tảng giữ CommissionPercent trên giá cuối cùng, còn lại là thu nhập tài xế.
-        booking.CommissionAmount = GeoUtils.Round1000(booking.FinalPrice.Value * rule.CommissionPercent / 100m);
-        booking.DriverPayout = booking.FinalPrice.Value - booking.CommissionAmount;
+        // Chia doanh thu trên giá TRƯỚC voucher: nền tảng chịu toàn bộ tiền giảm giá, tài xế nhận đủ.
+        // CommissionAmount = phần nền tảng thực thu (có thể âm khi voucher lớn hơn hoa hồng).
+        var gross = booking.FinalPrice.Value + booking.Discount;
+        booking.DriverPayout = gross - GeoUtils.Round1000(gross * rule.CommissionPercent / 100m);
+        booking.CommissionAmount = booking.FinalPrice.Value - booking.DriverPayout;
 
         driver.TotalTrips += 1;
         driver.TotalEarnings += booking.DriverPayout;

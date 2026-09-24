@@ -1198,8 +1198,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 color: DrivoColors.success),
           const Divider(color: DrivoColors.border),
           row(b.paymentMethod == 'Cash' ? 'Thu tiền mặt của khách' : 'Khách đã trả qua app', money(total), bold: true),
-          if (b.commissionAmount > 0)
-            row('Hoa hồng nền tảng DRIVO', '-${money(b.commissionAmount)}', color: DrivoColors.danger),
+          // Voucher do DRIVO chịu: hoa hồng tính trên giá trước giảm, DRIVO bù lại phần giảm cho tài xế.
+          if (b.driverPayout > 0 && total + b.discount - b.driverPayout > 0)
+            row('Hoa hồng nền tảng DRIVO', '-${money(total + b.discount - b.driverPayout)}', color: DrivoColors.danger),
+          if (b.driverPayout > 0 && b.discount > 0)
+            row('DRIVO bù khuyến mãi', '+${money(b.discount)}', color: DrivoColors.success),
           row('Bạn thực nhận', money(b.driverPayout > 0 ? b.driverPayout : total),
               bold: true, color: DrivoColors.success),
         ]),
