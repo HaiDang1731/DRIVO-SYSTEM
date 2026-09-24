@@ -1134,9 +1134,16 @@ class _ActivityTabViewState extends State<_ActivityTabView> {
                           _tripRow(Icons.location_on_rounded, b.destinationAddress, const Color(0xFFEF4444)),
                           const SizedBox(height: 12),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(b.vehicleInfo, style: GoogleFonts.inter(fontSize: 12, color: Colors.white54), overflow: TextOverflow.ellipsis),
+                              Expanded(
+                                child: Text(
+                                  b.vehicleInfo,
+                                  style: GoogleFonts.inter(fontSize: 12, color: Colors.white54),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
                               Text(
                                 '${(price / 1000).toStringAsFixed(0)}K ₫',
                                 style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 15, color: Colors.white),
