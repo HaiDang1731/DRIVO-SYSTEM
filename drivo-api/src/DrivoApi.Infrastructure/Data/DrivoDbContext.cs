@@ -27,6 +27,7 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Voucher> Vouchers => Set<Voucher>();
+    public DbSet<DriverWalletTransaction> DriverWalletTransactions => Set<DriverWalletTransaction>();
 
     public static string ToSnakeUpper(string val) =>
         string.Concat(val.Select((x, i) => i > 0 && char.IsUpper(x) ? "_" + x : x.ToString())).ToUpperInvariant();
@@ -186,6 +187,12 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             e.Property(p => p.FreePickupKm).HasPrecision(6, 2);
             e.Property(p => p.OverDistanceTolerancePercent).HasPrecision(5, 2);
             e.Property(p => p.CommissionPercent).HasPrecision(5, 2);
+        });
+
+        modelBuilder.Entity<DriverWalletTransaction>(e =>
+        {
+            e.ToTable("DriverWalletTransactions");
+            e.HasOne(t => t.Driver).WithMany().HasForeignKey(t => t.DriverId);
         });
 
         // Table name mappings (matching exact database tables)

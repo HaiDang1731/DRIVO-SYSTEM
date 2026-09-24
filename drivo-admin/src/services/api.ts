@@ -8,6 +8,37 @@ export function apiFileUrl(path?: string | null): string {
   return BASE_URL.replace(/\/api\/v1$/, '') + path;
 }
 
+export interface WalletTx {
+  id: number;
+  driverId: number;
+  driverName?: string | null;
+  driverPhone?: string | null;
+  /** TOPUP | WITHDRAW | TRIP_CASH | TRIP_APP | ADJUSTMENT */
+  type: string;
+  amount: number;
+  balanceAfter?: number | null;
+  /** PENDING | COMPLETED | REJECTED */
+  status: string;
+  bookingId?: number | null;
+  bookingCode?: string | null;
+  referenceCode?: string | null;
+  note?: string | null;
+  createdAt: string;
+  processedAt?: string | null;
+}
+
+export interface WalletOverview {
+  minBalance: number;
+  totalBalance: number;
+  driversBelowMinimum: number;
+  pendingTopups: number;
+  pendingTopupAmount: number;
+  pendingWithdrawals: number;
+  pendingWithdrawAmount: number;
+  drivers: { driverId: number; fullName: string; phone: string; balance: number; belowMinimum: boolean; pendingRequests: number; driverStatus: string }[];
+  pendingRequests: WalletTx[];
+}
+
 /** Hồ sơ tài xế (khớp DriverProfileFields ở backend). */
 export interface DriverProfileFields {
   fullName?: string | null;
@@ -224,6 +255,16 @@ export const api = {
 
   completeDriverReview: (id: string | number) =>
     api.request(`/admin/drivers/${id}/review-complete`, { method: 'POST' }),
+
+  // Ví tài xế
+  getWalletOverview: (): Promise<ApiResponse<WalletOverview>> => api.request('/admin/wallets'),
+  getDriverWalletTransactions: (driverId: number): Promise<ApiResponse<WalletTx[]>> =>
+    api.request(`/admin/wallets/drivers/${driverId}/transactions`),
+  approveWalletTx: (id: number) => api.request(`/admin/wallets/transactions/${id}/approve`, { method: 'POST' }),
+  rejectWalletTx: (id: number, reason: string) =>
+    api.request(`/admin/wallets/transactions/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  adjustWallet: (driverId: number, amount: number, note: string) =>
+    api.request(`/admin/wallets/drivers/${driverId}/adjust`, { method: 'POST', body: JSON.stringify({ amount, note }) }),
 
   createDriver: (data: object) =>
     api.request('/admin/drivers', { method: 'POST', body: JSON.stringify(data) }),

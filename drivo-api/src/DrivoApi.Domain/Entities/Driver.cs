@@ -43,6 +43,9 @@ public class Driver
     public bool ProfileReviewPending { get; set; }
     public DateTime? ProfileUpdatedAt { get; set; }
 
+    /// <summary>Số dư ví ký quỹ. Chỉ thay đổi qua DriverWalletTransaction (UPDATE cộng dồn, không ghi đè).</summary>
+    public decimal WalletBalance { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 

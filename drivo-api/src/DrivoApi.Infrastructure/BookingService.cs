@@ -5,6 +5,7 @@ using DrivoApi.Application.DTOs.Common;
 using DrivoApi.Application.DTOs.Driver;
 using DrivoApi.Application.DTOs.Maps;
 using DrivoApi.Application.DTOs.Tracking;
+using DrivoApi.Application.DTOs.Wallet;
 using DrivoApi.Application.Services;
 using DrivoApi.Domain.Entities;
 using DrivoApi.Domain.Enums;
@@ -13,7 +14,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DrivoApi.Infrastructure;
 
-public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotifier notifier) : IBookingService
+public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotifier notifier, IDriverWalletService wallet) : IBookingService
 {
     /// <summary>Bán kính (km, đường chim bay) để tài xế thấy cuốc chờ.</summary>
     private const double PendingSearchRadiusKm = 10.0;
@@ -616,6 +617,10 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (isOnline && driver.VerificationStatus != VerificationStatus.Approved)
             return BaseResponse<bool>.Fail("Tài khoản tài xế chưa được duyệt, chưa thể bật trực tuyến.");
 
+        if (isOnline && driver.WalletBalance < WalletSettings.MinBalance)
+            return BaseResponse<bool>.Fail(
+                $"Ví cần tối thiểu {Vnd(WalletSettings.MinBalance)} để nhận cuốc. Vui lòng nạp thêm {Vnd(WalletSettings.MinBalance - driver.WalletBalance)}.");
+
         if (!isOnline && driver.DriverStatus == DriverStatus.Busy)
             return BaseResponse<bool>.Fail("Bạn đang có cuốc chưa hoàn thành, không thể ngoại tuyến.");
 
@@ -683,6 +688,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .Where(d => d.DriverStatus == DriverStatus.Online &&
                         d.VerificationStatus == VerificationStatus.Approved &&
                         d.User.Status == UserStatus.Active &&
+                        d.WalletBalance >= WalletSettings.MinBalance &&
                         d.CurrentLatitude != null && d.CurrentLongitude != null &&
                         d.LastLocationAt != null && d.LastLocationAt >= since &&
                         !excludeDriverIds.Contains(d.Id))
@@ -781,6 +787,8 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var driver = await db.Drivers.AsNoTracking().FirstOrDefaultAsync(d => d.UserId == userId);
         if (driver == null)
             return BaseResponse<List<BookingDetailResponse>>.Ok([]);
+        if (driver.WalletBalance < WalletSettings.MinBalance)
+            return BaseResponse<List<BookingDetailResponse>>.Ok([]); // ví dưới mức ký quỹ: hoàn thành chuyến đang chạy, không nhận cuốc mới
         if (driver.CurrentLatitude is not { } dLat || driver.CurrentLongitude is not { } dLng || !GeoUtils.IsValid(dLat, dLng))
             return BaseResponse<List<BookingDetailResponse>>.Ok([]); // chưa có vị trí -> không ghép được cuốc gần
 
@@ -902,6 +910,10 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
 
         if (driver.DriverStatus != DriverStatus.Online)
             return BaseResponse<BookingDetailResponse>.Fail("Bạn cần bật trực tuyến để nhận cuốc.");
+
+        if (driver.WalletBalance < WalletSettings.MinBalance)
+            return BaseResponse<BookingDetailResponse>.Fail(
+                $"Ví dưới mức ký quỹ {Vnd(WalletSettings.MinBalance)}, vui lòng nạp thêm để nhận cuốc.");
 
         // Check if driver already has an active booking
         var hasActive = await db.Bookings.AnyAsync(b =>
@@ -1057,6 +1069,8 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         });
 
         await db.SaveChangesAsync();
+        if (parsedStatus == BookingStatus.Completed)
+            await wallet.SettleTripAsync(booking.Id); // cấn trừ ví tài xế theo chuyến
         await NotifyStatusAsync(booking);
         return BaseResponse<BookingDetailResponse>.Ok(MapToDetailResponse(booking));
     }

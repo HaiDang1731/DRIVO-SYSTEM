@@ -10,6 +10,7 @@ import '../../../../../core/geo_utils.dart';
 import '../../../../../core/location_service.dart';
 import '../../../../../core/theme.dart';
 import '../../profile/driver_profile_view.dart';
+import '../../wallet/driver_wallet_screen.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   final AuthUser user;
@@ -164,7 +165,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
     }
   }
 
+  WalletInfo? _wallet;
+
+  Future<void> _loadWallet() async {
+    final res = await ApiService.getWallet();
+    if (res['success'] == true && res['data'] != null && mounted) {
+      setState(() => _wallet = WalletInfo.fromJson(res['data']));
+    }
+  }
+
   Future<void> _loadProfile() async {
+    _loadWallet(); // số dư ví đổi sau mỗi chuyến / khi DRIVO duyệt nạp
     setState(() => _loadingProfile = true);
     final res = await ApiService.getDriverProfile();
     if (res['success'] == true && mounted) {
@@ -509,11 +520,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
         _lastSentAt = DateTime.now();
       }
       _syncLocationUpdates();
+      final ok = res['success'] == true;
+      final msg = (res['message'] ?? (newStatus ? 'Đang trực tuyến' : 'Đã ngoại tuyến')).toString();
+      final walletShort = !ok && msg.startsWith('Ví');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(res['message'] ?? (newStatus ? 'Đang trực tuyến' : 'Đã ngoại tuyến')),
-        backgroundColor: newStatus ? DrivoColors.success : DrivoColors.textMuted,
-        duration: const Duration(seconds: 2),
+        content: Text(msg),
+        backgroundColor: !ok ? DrivoColors.danger : (newStatus ? DrivoColors.success : DrivoColors.textMuted),
+        duration: Duration(seconds: ok ? 2 : 5),
+        action: walletShort ? SnackBarAction(label: 'Nạp tiền', textColor: Colors.white, onPressed: _openWallet) : null,
       ));
+      if (walletShort) _loadWallet();
     }
   }
 
@@ -837,6 +853,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
             )),
           ],
 
+          const SizedBox(height: 16),
+          _buildWalletCard(),
           const SizedBox(height: 24),
 
           // Stats
@@ -859,6 +877,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
               const Icon(Icons.account_balance_wallet_rounded, color: DrivoColors.success, size: 32),
             ]),
           ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _openWallet() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DriverWalletScreen()));
+    _loadWallet();
+  }
+
+  Widget _buildWalletCard() {
+    final w = _wallet;
+    final ok = w?.canTakeTrips ?? true;
+    final color = ok ? DrivoColors.success : DrivoColors.warning;
+    String k(double v) => '${(v / 1000).toStringAsFixed(0)}K ₫';
+    return InkWell(
+      onTap: _openWallet,
+      borderRadius: BorderRadius.circular(16),
+      child: DrivoCard(
+        padding: const EdgeInsets.all(16),
+        child: Row(children: [
+          Icon(Icons.account_balance_wallet_rounded, color: color, size: 30),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Ví tài xế', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 12)),
+              Text(w == null ? '...' : k(w.balance),
+                  style: GoogleFonts.inter(color: color, fontSize: 20, fontWeight: FontWeight.w800)),
+              if (w != null && !ok)
+                Text('Nạp thêm ${k(w.minBalance - w.balance)} để nhận cuốc (tối thiểu ${k(w.minBalance)})',
+                    style: GoogleFonts.inter(color: DrivoColors.warning, fontSize: 11.5)),
+            ]),
+          ),
+          Text(ok ? 'Chi tiết' : 'Nạp tiền',
+              style: GoogleFonts.inter(color: DrivoColors.primary, fontWeight: FontWeight.w700, fontSize: 13)),
+          const Icon(Icons.chevron_right, color: DrivoColors.primary),
         ]),
       ),
     );
@@ -1806,7 +1860,6 @@ class _EarningsTabState extends State<_EarningsTab> {
           ]),
         );
 
-    final owesDriver = d.balanceWithPlatform >= 0;
     return DrivoCard(
       child: Column(children: [
         row('Tổng cước', _vnd(d.grossFare),
@@ -1815,12 +1868,12 @@ class _EarningsTabState extends State<_EarningsTab> {
         const Divider(color: DrivoColors.border),
         row('Thực nhận', _vnd(d.payout), color: DrivoColors.success, bold: true),
         const SizedBox(height: 6),
-        row('Tiền mặt đã thu của khách', _vnd(d.cashCollected)),
+        row('Tiền mặt đã thu của khách', _vnd(d.cashCollected), note: 'Bạn giữ số tiền này'),
         row(
-          owesDriver ? 'DRIVO cần trả bạn' : 'Bạn cần nộp lại DRIVO',
-          _vnd(d.balanceWithPlatform.abs()),
-          color: owesDriver ? DrivoColors.success : DrivoColors.warning,
-          note: 'Thực nhận − tiền mặt đã thu',
+          'Cấn trừ vào ví tài xế',
+          '${d.balanceWithPlatform >= 0 ? '+' : '-'}${_vnd(d.balanceWithPlatform.abs())}',
+          color: d.balanceWithPlatform >= 0 ? DrivoColors.success : DrivoColors.warning,
+          note: 'Tự động khi hoàn thành chuyến (thực nhận − tiền mặt đã thu)',
         ),
       ]),
     );

@@ -81,6 +81,7 @@ builder.Services.AddScoped<IAdminDashboardService, AdminDashboardService>();
 builder.Services.AddScoped<IAdminDriverService, AdminDriverService>();
 builder.Services.AddScoped<IDriverProfileService, DriverProfileService>();
 builder.Services.AddScoped<ICustomerVehicleService, CustomerVehicleService>();
+builder.Services.AddScoped<IDriverWalletService, DriverWalletService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
 
 // Bản đồ OpenStreetMap miễn phí (Photon / Nominatim / OSRM) — không cần API key. Cấu hình tùy chọn: "Maps".

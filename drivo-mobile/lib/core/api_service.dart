@@ -381,6 +381,67 @@ class VoucherInfo {
   }
 }
 
+class WalletTx {
+  final int id;
+  /// TOPUP | WITHDRAW | TRIP_CASH | TRIP_APP | ADJUSTMENT
+  final String type;
+  final double amount;
+  final double? balanceAfter;
+  /// PENDING | COMPLETED | REJECTED
+  final String status;
+  final String? bookingCode;
+  final String? referenceCode;
+  final String? note;
+  final DateTime createdAt;
+
+  WalletTx.fromJson(Map<String, dynamic> j)
+      : id = _toI(j['id']) ?? 0,
+        type = j['type'] ?? '',
+        amount = _toD(j['amount']) ?? 0,
+        balanceAfter = _toD(j['balanceAfter']),
+        status = j['status'] ?? '',
+        bookingCode = j['bookingCode'],
+        referenceCode = j['referenceCode'],
+        note = j['note'],
+        createdAt = _utcToLocal(j['createdAt']) ?? DateTime.now();
+
+  String get typeLabel => switch (type) {
+        'TOPUP' => 'Nạp tiền',
+        'WITHDRAW' => 'Rút tiền',
+        'TRIP_CASH' => 'Chuyến tiền mặt · trừ hoa hồng',
+        'TRIP_APP' => 'Chuyến trả qua app · cộng thu nhập',
+        'ADJUSTMENT' => 'DRIVO điều chỉnh',
+        _ => type,
+      };
+}
+
+class WalletInfo {
+  final double balance;
+  final double minBalance;
+  final bool canTakeTrips;
+  final double withdrawable;
+  final String drivoBankName;
+  final String drivoAccountNumber;
+  final String drivoAccountHolder;
+  final String? payoutBankName;
+  final String? payoutAccountNumber;
+  final String? payoutAccountHolder;
+  final List<WalletTx> transactions;
+
+  WalletInfo.fromJson(Map<String, dynamic> j)
+      : balance = _toD(j['balance']) ?? 0,
+        minBalance = _toD(j['minBalance']) ?? 500000,
+        canTakeTrips = j['canTakeTrips'] ?? false,
+        withdrawable = _toD(j['withdrawable']) ?? 0,
+        drivoBankName = j['drivoBank']?['bankName'] ?? '',
+        drivoAccountNumber = j['drivoBank']?['accountNumber'] ?? '',
+        drivoAccountHolder = j['drivoBank']?['accountHolder'] ?? '',
+        payoutBankName = j['payoutBankName'],
+        payoutAccountNumber = j['payoutAccountNumber'],
+        payoutAccountHolder = j['payoutAccountHolder'],
+        transactions = ((j['transactions'] as List?) ?? []).map((x) => WalletTx.fromJson(x)).toList();
+}
+
 class EarningsTrip {
   final int id;
   final String bookingCode;
@@ -922,6 +983,12 @@ class ApiService {
 
   // Driver
   static Future<Map<String, dynamic>> getDriverProfile() => get('/driver/profile');
+
+  // Ví tài xế
+  static Future<Map<String, dynamic>> getWallet() => get('/driver/wallet');
+  static Future<Map<String, dynamic>> walletTopup(double amount) => post('/driver/wallet/topup', {'amount': amount});
+  static Future<Map<String, dynamic>> walletWithdraw(double amount) => post('/driver/wallet/withdraw', {'amount': amount});
+  static Future<Map<String, dynamic>> cancelWalletRequest(int id) => post('/driver/wallet/requests/$id/cancel', {});
 
   /// Đường dẫn file do API trả về ("/uploads/...") -> URL đầy đủ.
   static String fileUrl(String path) {
