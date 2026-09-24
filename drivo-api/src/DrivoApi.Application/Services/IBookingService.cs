@@ -13,6 +13,8 @@ public interface IBookingService
     Task<BaseResponse<bool>> CancelBookingAsync(long bookingId, int userId, CancelBookingRequest request);
     Task<BaseResponse<bool>> CancelBookingByDriverAsync(long bookingId, int userId, CancelBookingRequest request);
     Task<BaseResponse<List<BookingDetailResponse>>> GetCustomerBookingsAsync(int userId, int page, int pageSize);
+    Task<BaseResponse<List<VoucherResponse>>> GetAvailableVouchersAsync(int userId);
+    Task<BaseResponse<CheckVoucherResponse>> CheckVoucherAsync(int userId, CheckVoucherRequest request);
 
     // Driver methods
     Task<BaseResponse<bool>> ToggleDriverStatusAsync(int userId, bool isOnline, decimal? latitude = null, decimal? longitude = null);

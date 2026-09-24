@@ -36,6 +36,11 @@ public class Booking
     public decimal CommissionAmount { get; set; }
     public decimal DriverPayout { get; set; }
 
+    public PaymentMethod PaymentMethod { get; set; } = PaymentMethod.Cash;
+    // Voucher áp lúc đặt chuyến; Discount đã chốt theo giá ước tính.
+    public int? VoucherId { get; set; }
+    public string? VoucherCode { get; set; }
+
     // Pickup leg (driver scooter -> pickup), waiting & over-distance fees
     public decimal? PickupDistanceKm { get; set; }
     public decimal PickupFee { get; set; }

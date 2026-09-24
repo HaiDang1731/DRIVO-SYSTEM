@@ -380,6 +380,9 @@ namespace DrivoApi.WebApi.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateVoucher([FromBody] Voucher voucher)
         {
+            voucher.Code = (voucher.Code ?? string.Empty).Trim().ToUpperInvariant();
+            if (voucher.Code.Length == 0)
+                return BadRequest(BaseResponse<object>.Fail("Vui lòng nhập mã voucher"));
             if (await _db.Vouchers.AnyAsync(v => v.Code == voucher.Code))
                 return BadRequest(BaseResponse<object>.Fail("Mã voucher đã tồn tại"));
 

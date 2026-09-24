@@ -113,13 +113,18 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
             .Property(cv => cv.Transmission)
             .HasConversion<string>();
 
+        // CK_Payments_* yêu cầu 'CASH' | 'MOCK_BANKING' | 'SUCCESS'... (snake upper)
         modelBuilder.Entity<Payment>()
             .Property(p => p.PaymentStatus)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentStatus>(v));
 
         modelBuilder.Entity<Payment>()
             .Property(p => p.PaymentMethod)
-            .HasConversion<string>();
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentMethod>(v));
+
+        modelBuilder.Entity<Booking>()
+            .Property(b => b.PaymentMethod)
+            .HasConversion(v => ToSnakeUpper(v.ToString()), v => FromSnakeUpper<PaymentMethod>(v));
 
         modelBuilder.Entity<PricingRule>()
             .Property(pr => pr.VehicleType)

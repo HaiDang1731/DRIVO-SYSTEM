@@ -1193,9 +1193,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           if (b.extraDistanceFee > 0)
             row('Phụ phí quãng đường${b.actualDistanceKm != null ? ' (${b.actualDistanceKm!.toStringAsFixed(1)} km)' : ''}',
                 money(b.extraDistanceFee)),
-          if (b.discount > 0) row('Giảm giá', '-${money(b.discount)}', color: DrivoColors.success),
+          if (b.discount > 0)
+            row('Giảm giá${b.voucherCode != null ? ' (${b.voucherCode})' : ''}', '-${money(b.discount)}',
+                color: DrivoColors.success),
           const Divider(color: DrivoColors.border),
-          row('Khách thanh toán', money(total), bold: true),
+          row(b.paymentMethod == 'Cash' ? 'Thu tiền mặt của khách' : 'Khách đã trả qua app', money(total), bold: true),
           if (b.commissionAmount > 0)
             row('Hoa hồng nền tảng DRIVO', '-${money(b.commissionAmount)}', color: DrivoColors.danger),
           row('Bạn thực nhận', money(b.driverPayout > 0 ? b.driverPayout : total),

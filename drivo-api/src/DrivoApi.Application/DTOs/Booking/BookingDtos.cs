@@ -48,6 +48,34 @@ public class CreateBookingRequest
     public decimal DestinationLatitude { get; set; }
     public decimal DestinationLongitude { get; set; }
     public string? CustomerNote { get; set; }
+    public PaymentMethod PaymentMethod { get; set; } = PaymentMethod.Cash;
+    public string? VoucherCode { get; set; }
+}
+
+public class VoucherResponse
+{
+    public string Code { get; set; } = null!;
+    public string Title { get; set; } = null!;
+    public string? Description { get; set; }
+    public string DiscountType { get; set; } = null!;
+    public decimal DiscountValue { get; set; }
+    public decimal? MaxDiscountAmount { get; set; }
+    public decimal MinOrderAmount { get; set; }
+    public DateTime EndDate { get; set; }
+}
+
+public class CheckVoucherRequest
+{
+    public string Code { get; set; } = null!;
+    /// <summary>Giá ước tính của chuyến (trước giảm giá).</summary>
+    public decimal OrderAmount { get; set; }
+}
+
+public class CheckVoucherResponse
+{
+    public string Code { get; set; } = null!;
+    public string Title { get; set; } = null!;
+    public decimal Discount { get; set; }
 }
 
 public class CancelBookingRequest
@@ -106,6 +134,8 @@ public class BookingDetailResponse
     public decimal CommissionAmount { get; set; }
     /// <summary>Thu nhập thực nhận của tài xế = FinalPrice - CommissionAmount.</summary>
     public decimal DriverPayout { get; set; }
+    public string PaymentMethod { get; set; } = "Cash";
+    public string? VoucherCode { get; set; }
     public DateTime? AcceptedAt { get; set; }
     public DateTime? ArrivedAt { get; set; }
     public DateTime? StartedAt { get; set; }

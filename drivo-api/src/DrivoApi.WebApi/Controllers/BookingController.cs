@@ -67,6 +67,24 @@ public class BookingController(IBookingService bookingService) : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Danh sách mã khuyến mãi khách còn dùng được</summary>
+    [HttpGet("vouchers")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> GetVouchers()
+    {
+        var result = await bookingService.GetAvailableVouchersAsync(CurrentUserId);
+        return Ok(result);
+    }
+
+    /// <summary>Kiểm tra mã khuyến mãi và số tiền được giảm cho giá ước tính</summary>
+    [HttpPost("vouchers/check")]
+    [Authorize(Roles = "CUSTOMER")]
+    public async Task<IActionResult> CheckVoucher([FromBody] CheckVoucherRequest request)
+    {
+        var result = await bookingService.CheckVoucherAsync(CurrentUserId, request);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     [HttpPost("{id:long}/rate")]
     public async Task<IActionResult> RateBooking(long id, [FromBody] DrivoApi.Application.DTOs.Booking.RateBookingRequest req)
     {

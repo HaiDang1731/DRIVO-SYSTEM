@@ -404,6 +404,8 @@ class DriverBooking {
   final double? actualDistanceKm;
   final double commissionAmount;
   final double driverPayout;
+  final String paymentMethod;
+  final String? voucherCode;
   final String? customerName;
   final String? customerPhone;
 
@@ -437,6 +439,8 @@ class DriverBooking {
     this.actualDistanceKm,
     this.commissionAmount = 0,
     this.driverPayout = 0,
+    this.paymentMethod = 'Cash',
+    this.voucherCode,
     this.customerName,
     this.customerPhone,
   });
@@ -466,6 +470,8 @@ class DriverBooking {
       actualDistanceKm: _toD(j['actualDistanceKm']),
       commissionAmount: _toD(j['commissionAmount']) ?? 0,
       driverPayout: _toD(j['driverPayout']) ?? 0,
+      paymentMethod: j['paymentMethod'] ?? 'Cash',
+      voucherCode: j['voucherCode'],
       customerName: c is Map ? c['fullName'] : j['customerName'],
       customerPhone: c is Map ? c['phone'] : j['customerPhone'],
       id: j['id'],
@@ -745,6 +751,9 @@ class ApiService {
   // (+ vehicleType, transmission). createBooking: thêm pickupAddress/destinationAddress.
   static Future<Map<String, dynamic>> estimateFare(Map<String, dynamic> data) => post('/bookings/estimate', data);
   static Future<Map<String, dynamic>> createBooking(Map<String, dynamic> data) => post('/bookings', data);
+  static Future<Map<String, dynamic>> getAvailableVouchers() => get('/bookings/vouchers');
+  static Future<Map<String, dynamic>> checkVoucher(String code, double orderAmount) =>
+      post('/bookings/vouchers/check', {'code': code, 'orderAmount': orderAmount});
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');
   static Future<Map<String, dynamic>> getBookingById(int id) => get('/bookings/$id');
   static Future<Map<String, dynamic>> rateDriver(int bookingId, int score, String comment) => post('/bookings/$bookingId/rate', {'score': score, 'comment': comment});

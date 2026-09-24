@@ -43,6 +43,16 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   String _paymentMethod = 'Tiền mặt';
   String _customerNote = '';
 
+  // Voucher đã áp: mã + số tiền giảm tính theo giá ước tính hiện tại
+  String? _voucherCode;
+  double _voucherDiscount = 0;
+
+  static const Map<String, String> _paymentMethodApi = {
+    'Tiền mặt': 'Cash',
+    'Ví điện tử': 'MockEwallet',
+    'Chuyển khoản QR': 'MockBanking',
+  };
+
   // Quản lý xe
   List<CustomerVehicle> _vehicles = [];
   CustomerVehicle? _selectedVehicle;
@@ -257,6 +267,8 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
           _loadingEstimate = false;
         });
         _fitRoute();
+        // Giá đổi (đổi điểm đến/xe) -> tính lại số tiền giảm của voucher đang áp
+        if (_voucherCode != null) _applyVoucher(_voucherCode!, silent: true);
       } else {
         setState(() {
           _estimate = null;
@@ -310,7 +322,9 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
         'destinationLatitude': _destinationLatLng!.latitude,
         'destinationLongitude': _destinationLatLng!.longitude,
         'customerVehicleId': _selectedVehicle!.id,
-        'customerNote': '$_customerNote | Xe điện gấp: ${_allowFoldingScooter ? "Có" : "Không"} | PT: $_paymentMethod',
+        'customerNote': '$_customerNote | Xe điện gấp: ${_allowFoldingScooter ? "Có" : "Không"}',
+        'paymentMethod': _paymentMethodApi[_paymentMethod] ?? 'Cash',
+        'voucherCode': ?_voucherCode,
       });
 
       if (res['success'] == true && res['data'] != null) {
@@ -321,6 +335,8 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
             _submitting = false;
             _driverLatLng = null;
             _fittedForBooking = false;
+            _voucherCode = null;
+            _voucherDiscount = 0;
           });
           _syncTrackingGroup();
           _startPolling();
@@ -1325,7 +1341,10 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
   // ── Booking Bottom Sheet Panel ──────────────────────────────
   Widget _buildBookingBottomPanel() {
     final est = _estimate;
-    final String fareText = _loadingEstimate ? '...' : (est != null ? _formatCurrency(est.totalEstimatedFare) : '—');
+    final double discount = est != null ? math.min(_voucherDiscount, est.totalEstimatedFare) : 0;
+    final String fareText = _loadingEstimate
+        ? '...'
+        : (est != null ? _formatCurrency(est.totalEstimatedFare - discount) : '—');
     final String distanceText =
         _loadingEstimate ? '...' : (est != null ? '${est.estimatedDistanceKm.toStringAsFixed(1)}km' : '—');
 
@@ -1472,6 +1491,11 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                           ],
                         ),
                       ),
+                      if (est != null && !_loadingEstimate && discount > 0)
+                        Text(
+                          '${_formatCurrency(est.totalEstimatedFare)} · giảm ${_formatCurrency(discount)}',
+                          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF16A34A), fontWeight: FontWeight.w600),
+                        ),
                       const SizedBox(height: 2),
                       GestureDetector(
                         onTap: () {
@@ -1575,17 +1599,23 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.local_offer_outlined, color: Color(0xFF0070E0), size: 16),
+                          Icon(
+                            _voucherCode != null ? Icons.local_offer_rounded : Icons.local_offer_outlined,
+                            color: _voucherCode != null ? const Color(0xFF16A34A) : const Color(0xFF0070E0),
+                            size: 16,
+                          ),
                           const SizedBox(width: 4),
-                          Text(
-                            'Khuyến mãi',
-                            style: GoogleFonts.inter(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: const Color(0xFF0070E0),
+                          Flexible(
+                            child: Text(
+                              _voucherCode ?? 'Khuyến mãi',
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: _voucherCode != null ? const Color(0xFF16A34A) : const Color(0xFF0070E0),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
@@ -1945,7 +1975,12 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
               row('Cước theo thời gian', _formatCurrency(est.timeFare)),
               if (est.nightSurcharge > 0) row('Phụ phí ban đêm', _formatCurrency(est.nightSurcharge)),
               const Divider(),
-              row('Cước chuyến', _formatCurrency(est.totalEstimatedFare), bold: true),
+              if (_voucherDiscount > 0) ...[
+                row('Cước chuyến', _formatCurrency(est.totalEstimatedFare)),
+                row('Khuyến mãi ${_voucherCode ?? ''}', '-${_formatCurrency(math.min(_voucherDiscount, est.totalEstimatedFare))}'),
+                row('Tạm tính', _formatCurrency(est.totalEstimatedFare - math.min(_voucherDiscount, est.totalEstimatedFare)), bold: true),
+              ] else
+                row('Cước chuyến', _formatCurrency(est.totalEstimatedFare), bold: true),
               const SizedBox(height: 10),
               _buildPickupFeeInfo(est),
               if (est.freeWaitingMin > 0 && est.waitingPricePerMin > 0) ...[
@@ -2443,25 +2478,179 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     );
   }
 
+  void _clearVoucher() => setState(() {
+        _voucherCode = null;
+        _voucherDiscount = 0;
+      });
+
+  /// Kiểm tra mã với giá ước tính hiện tại. Trả về thông báo lỗi (null nếu áp thành công).
+  Future<String?> _applyVoucher(String code, {bool silent = false}) async {
+    final est = _estimate;
+    if (est == null) return 'Chọn điểm đến để xem giá trước khi áp mã';
+    try {
+      final res = await ApiService.checkVoucher(code.trim(), est.totalEstimatedFare);
+      if (!mounted) return null;
+      if (res['success'] == true && res['data'] != null) {
+        final d = res['data'];
+        setState(() {
+          _voucherCode = d['code'];
+          _voucherDiscount = (d['discount'] as num?)?.toDouble() ?? 0;
+        });
+        return null;
+      }
+      final msg = res['message']?.toString() ?? 'Mã không hợp lệ';
+      if (silent && _voucherCode != null) {
+        _clearVoucher();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã bỏ mã khuyến mãi: $msg'), backgroundColor: const Color(0xFFF59E0B)),
+        );
+      }
+      return msg;
+    } catch (_) {
+      return 'Không kiểm tra được mã, vui lòng thử lại';
+    }
+  }
+
+  static String _voucherDesc(Map<String, dynamic> v, String Function(double) fmt) {
+    final value = (v['discountValue'] as num?)?.toDouble() ?? 0;
+    final max = (v['maxDiscountAmount'] as num?)?.toDouble();
+    final min = (v['minOrderAmount'] as num?)?.toDouble() ?? 0;
+    final parts = <String>[
+      v['discountType'] == 'PERCENT'
+          ? 'Giảm ${value.toStringAsFixed(0)}%${max != null && max > 0 ? ', tối đa ${fmt(max)}' : ''}'
+          : 'Giảm ${fmt(value)}',
+      if (min > 0) 'đơn từ ${fmt(min)}',
+    ];
+    return parts.join(' · ');
+  }
+
   void _showPromoDialog() {
+    final ctrl = TextEditingController(text: _voucherCode ?? '');
+    final vouchersFuture = ApiService.getAvailableVouchers();
+    String? error;
+    bool applying = false;
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Mã khuyến mãi', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 10),
-            const ListTile(
-              leading: Icon(Icons.confirmation_num_outlined, color: Color(0xFF94A3B8)),
-              title: Text('Hiện chưa có mã khuyến mãi khả dụng'),
-              subtitle: Text('Ưu đãi (nếu có) sẽ được trừ trực tiếp vào cước khi hoàn thành chuyến'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          Future<void> apply(String code) async {
+            if (code.trim().isEmpty || applying) return;
+            setSheet(() {
+              applying = true;
+              error = null;
+            });
+            final err = await _applyVoucher(code);
+            if (!ctx.mounted || !mounted) return;
+            if (err == null) {
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Đã áp mã $_voucherCode, giảm ${_formatCurrency(_voucherDiscount)}'),
+                backgroundColor: const Color(0xFF16A34A),
+              ));
+            } else {
+              setSheet(() {
+                applying = false;
+                error = err;
+              });
+            }
+          }
+
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom, left: 20, right: 20, top: 20),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.75),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Mã khuyến mãi', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: ctrl,
+                          textCapitalization: TextCapitalization.characters,
+                          decoration: InputDecoration(hintText: 'Nhập mã, VD: DRIVOVIP', errorText: error),
+                          onSubmitted: apply,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0070E0),
+                          minimumSize: const Size(88, 48),
+                        ),
+                        onPressed: applying ? null : () => apply(ctrl.text),
+                        child: applying
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : const Text('Áp dụng', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                      ),
+                    ],
+                  ),
+                  if (_voucherCode != null) ...[
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(minimumSize: Size.zero, padding: EdgeInsets.zero),
+                      onPressed: () {
+                        _clearVoucher();
+                        Navigator.pop(ctx);
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 16, color: Color(0xFFE53935)),
+                      label: Text('Bỏ mã $_voucherCode', style: const TextStyle(color: Color(0xFFE53935))),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Text('Mã dành cho bạn', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: const Color(0xFF64748B))),
+                  const SizedBox(height: 6),
+                  Flexible(
+                    child: FutureBuilder<Map<String, dynamic>>(
+                      future: vouchersFuture,
+                      builder: (ctx, snap) {
+                        if (snap.connectionState != ConnectionState.done) {
+                          return const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                          );
+                        }
+                        final list = (snap.data?['data'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+                        if (list.isEmpty) {
+                          return const ListTile(
+                            leading: Icon(Icons.confirmation_num_outlined, color: Color(0xFF94A3B8)),
+                            title: Text('Hiện chưa có mã khuyến mãi khả dụng'),
+                          );
+                        }
+                        return ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: list.length,
+                          separatorBuilder: (_, _) => const Divider(height: 1),
+                          itemBuilder: (_, i) {
+                            final v = list[i];
+                            final selected = v['code'] == _voucherCode;
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.local_offer_rounded,
+                                  color: selected ? const Color(0xFF16A34A) : const Color(0xFF0070E0)),
+                              title: Text('${v['code']} · ${v['title']}',
+                                  style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w700)),
+                              subtitle: Text(_voucherDesc(v, _formatCurrency), style: GoogleFonts.inter(fontSize: 12)),
+                              trailing: selected ? const Icon(Icons.check, color: Color(0xFF16A34A)) : null,
+                              onTap: applying ? null : () => apply(v['code']),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

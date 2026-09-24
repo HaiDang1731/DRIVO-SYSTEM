@@ -172,6 +172,94 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
     }
 
     // ══════════════════════════════════════════════════════════
+    //  VOUCHERS
+    // ══════════════════════════════════════════════════════════
+
+    private static string NormalizeVoucherCode(string? code) => (code ?? string.Empty).Trim().ToUpperInvariant();
+
+    private static string Vnd(decimal amount) =>
+        amount.ToString("#,0", System.Globalization.CultureInfo.GetCultureInfo("vi-VN")) + "đ";
+
+    /// <summary>PERCENT: % giá ước tính, trần MaxDiscountAmount; FIXED: số tiền cố định. Không vượt giá chuyến.</summary>
+    private static decimal CalcVoucherDiscount(Voucher v, decimal orderAmount)
+    {
+        var raw = string.Equals(v.DiscountType, "PERCENT", StringComparison.OrdinalIgnoreCase)
+            ? orderAmount * v.DiscountValue / 100m
+            : v.DiscountValue;
+        var discount = GeoUtils.Round1000(Math.Max(0m, raw));
+        if (v.MaxDiscountAmount is > 0) discount = Math.Min(discount, v.MaxDiscountAmount.Value);
+        return Math.Min(discount, orderAmount);
+    }
+
+    private IQueryable<Voucher> UsableVouchers(DateTime now) => db.Vouchers.AsNoTracking()
+        .Where(v => v.IsActive && v.StartDate <= now && v.EndDate >= now && v.UsedCount < v.UsageLimit);
+
+    private Task<bool> CustomerUsedVoucherAsync(int customerId, int voucherId) =>
+        db.Bookings.AnyAsync(b => b.CustomerId == customerId && b.VoucherId == voucherId && b.Status != BookingStatus.Cancelled);
+
+    private async Task<(Voucher? Voucher, decimal Discount, string? Error)> ResolveVoucherAsync(
+        int customerId, string code, decimal orderAmount)
+    {
+        var norm = NormalizeVoucherCode(code);
+        var now = DateTime.UtcNow;
+        var v = await db.Vouchers.AsNoTracking().FirstOrDefaultAsync(x => x.Code == norm);
+        if (v == null)
+            return (null, 0, "Mã khuyến mãi không tồn tại.");
+        if (!v.IsActive || now < v.StartDate || now > v.EndDate)
+            return (null, 0, "Mã khuyến mãi đã hết hạn hoặc đang tạm dừng.");
+        if (v.UsedCount >= v.UsageLimit)
+            return (null, 0, "Mã khuyến mãi đã hết lượt sử dụng.");
+        if (orderAmount < v.MinOrderAmount)
+            return (null, 0, $"Mã này chỉ áp dụng cho chuyến từ {Vnd(v.MinOrderAmount)}.");
+        if (customerId > 0 && await CustomerUsedVoucherAsync(customerId, v.Id))
+            return (null, 0, "Bạn đã sử dụng mã này rồi.");
+        return (v, CalcVoucherDiscount(v, orderAmount), null);
+    }
+
+    /// <summary>Trả lại 1 lượt dùng khi chuyến có voucher bị hủy.</summary>
+    private Task ReleaseVoucherAsync(Booking booking) =>
+        booking.VoucherId is int vid
+            ? db.Vouchers.Where(v => v.Id == vid && v.UsedCount > 0)
+                .ExecuteUpdateAsync(s => s.SetProperty(v => v.UsedCount, v => v.UsedCount - 1))
+            : Task.CompletedTask;
+
+    public async Task<BaseResponse<List<VoucherResponse>>> GetAvailableVouchersAsync(int userId)
+    {
+        var customerId = await db.Customers.Where(c => c.UserId == userId).Select(c => c.Id).FirstOrDefaultAsync();
+        var now = DateTime.UtcNow;
+        var list = await UsableVouchers(now)
+            .Where(v => customerId == 0 || !db.Bookings.Any(b =>
+                b.CustomerId == customerId && b.VoucherId == v.Id && b.Status != BookingStatus.Cancelled))
+            .OrderBy(v => v.EndDate)
+            .Select(v => new VoucherResponse
+            {
+                Code = v.Code,
+                Title = v.Title,
+                Description = v.Description,
+                DiscountType = v.DiscountType,
+                DiscountValue = v.DiscountValue,
+                MaxDiscountAmount = v.MaxDiscountAmount,
+                MinOrderAmount = v.MinOrderAmount,
+                EndDate = v.EndDate
+            })
+            .ToListAsync();
+        return BaseResponse<List<VoucherResponse>>.Ok(list);
+    }
+
+    public async Task<BaseResponse<CheckVoucherResponse>> CheckVoucherAsync(int userId, CheckVoucherRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Code))
+            return BaseResponse<CheckVoucherResponse>.Fail("Vui lòng nhập mã khuyến mãi.");
+        var customerId = await db.Customers.Where(c => c.UserId == userId).Select(c => c.Id).FirstOrDefaultAsync();
+        var (v, discount, error) = await ResolveVoucherAsync(customerId, req.Code, Math.Max(0m, req.OrderAmount));
+        if (error != null)
+            return BaseResponse<CheckVoucherResponse>.Fail(error);
+        return BaseResponse<CheckVoucherResponse>.Ok(
+            new CheckVoucherResponse { Code = v!.Code, Title = v.Title, Discount = discount },
+            $"Áp dụng thành công, giảm {Vnd(discount)}.");
+    }
+
+    // ══════════════════════════════════════════════════════════
     //  REALTIME HELPERS
     // ══════════════════════════════════════════════════════════
 
@@ -229,6 +317,24 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             Transmission = vehicle.Transmission
         });
 
+        // Voucher: kiểm tra theo giá ước tính server tự tính, rồi giữ 1 lượt dùng (atomic, không vượt UsageLimit)
+        Voucher? voucher = null;
+        var discount = 0m;
+        if (!string.IsNullOrWhiteSpace(req.VoucherCode))
+        {
+            var (v, d, error) = await ResolveVoucherAsync(customer.Id, req.VoucherCode, fare.TotalEstimatedFare);
+            if (error != null)
+                return BaseResponse<BookingDetailResponse>.Fail(error);
+
+            var claimed = await db.Vouchers
+                .Where(x => x.Id == v!.Id && x.UsedCount < x.UsageLimit)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.UsedCount, x => x.UsedCount + 1));
+            if (claimed == 0)
+                return BaseResponse<BookingDetailResponse>.Fail("Mã khuyến mãi đã hết lượt sử dụng.");
+            voucher = v;
+            discount = d;
+        }
+
         var bookingCode = $"DRV{DateTime.UtcNow:yyMMddHHmm}{Random.Shared.Next(100, 999)}";
 
         var booking = new Booking
@@ -252,7 +358,10 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             DistanceFare = fare.DistanceFare,
             TimeFare = fare.TimeFare,
             Surcharge = fare.NightSurcharge,
-            Discount = 0,
+            Discount = discount,
+            VoucherId = voucher?.Id,
+            VoucherCode = voucher?.Code,
+            PaymentMethod = req.PaymentMethod,
             EstimatedPrice = fare.TotalEstimatedFare,
             Status = BookingStatus.SearchingDriver,
             CustomerNote = req.CustomerNote,
@@ -362,6 +471,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         });
 
         await db.SaveChangesAsync();
+        await ReleaseVoucherAsync(booking);
         await NotifyStatusAsync(booking);
         return BaseResponse<bool>.Ok(true, "Hủy chuyến thành công.");
     }
@@ -401,6 +511,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         });
 
         await db.SaveChangesAsync();
+        await ReleaseVoucherAsync(booking);
         await NotifyStatusAsync(booking);
         return BaseResponse<bool>.Ok(true, "Hủy chuyến thành công.");
     }
@@ -455,6 +566,8 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         dto.ActualDistanceKm = b.ActualDistanceKm;
         dto.CommissionAmount = b.CommissionAmount;
         dto.DriverPayout = b.DriverPayout;
+        dto.PaymentMethod = b.PaymentMethod.ToString();
+        dto.VoucherCode = b.VoucherCode;
         dto.AcceptedAt = b.AcceptedAt;
         dto.ArrivedAt = b.ArrivedAt;
         dto.StartedAt = b.StartedAt;
@@ -773,7 +886,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             ? Math.Max(0, (int)Math.Round((now - booking.StartedAt.Value).TotalMinutes))
             : booking.EstimatedDurationMin;
 
-        db.Trips.Add(new Trip
+        var trip = new Trip
         {
             BookingId = booking.Id,
             DriverId = driver.Id,
@@ -787,6 +900,34 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             ActualDurationMin = durationMin,
             Status = "COMPLETED",
             CreatedAt = now
+        };
+        db.Trips.Add(trip);
+
+        // Tiền mặt: tài xế thu tại chỗ khi hoàn thành. Ví/chuyển khoản hiện là giả lập -> coi như trừ thành công.
+        var isCash = booking.PaymentMethod == PaymentMethod.Cash;
+        db.Payments.Add(new Payment
+        {
+            Trip = trip,
+            CustomerId = booking.CustomerId,
+            Amount = booking.FinalPrice.Value,
+            Currency = "VND",
+            PaymentMethod = booking.PaymentMethod,
+            PaymentStatus = PaymentStatus.Success,
+            PaidAt = now,
+            CreatedAt = now,
+            Transactions =
+            [
+                new PaymentTransaction
+                {
+                    TransactionCode = $"PAY-{booking.BookingCode}",
+                    TransactionType = "CHARGE",
+                    Amount = booking.FinalPrice.Value,
+                    Status = "SUCCESS",
+                    Provider = isCash ? "CASH" : "MOCK",
+                    CreatedAt = now,
+                    CompletedAt = now
+                }
+            ]
         });
     }
 
@@ -1095,6 +1236,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         });
 
         await db.SaveChangesAsync();
+        await ReleaseVoucherAsync(booking);
         await NotifyStatusAsync(booking);
         return BaseResponse<bool>.Ok(true, "Đã hủy chuyến đi thành công");
     }
