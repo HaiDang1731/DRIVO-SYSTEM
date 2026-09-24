@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using DrivoApi.Application.Common;
 using DrivoApi.Application.DTOs.Booking;
 using DrivoApi.Application.DTOs.Common;
+using DrivoApi.Application.DTOs.Driver;
 using DrivoApi.Application.DTOs.Maps;
 using DrivoApi.Application.DTOs.Tracking;
 using DrivoApi.Application.Services;
@@ -1055,6 +1056,103 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .FirstOrDefaultAsync();
 
         return BaseResponse<BookingDetailResponse?>.Ok(booking != null ? MapToDetailResponse(booking) : null);
+    }
+
+    public async Task<BaseResponse<DriverEarningsResponse>> GetDriverEarningsAsync(int userId, string period, DateTime? date)
+    {
+        var driver = await db.Drivers.AsNoTracking().FirstOrDefaultAsync(d => d.UserId == userId);
+        if (driver == null)
+            return BaseResponse<DriverEarningsResponse>.Fail("Không tìm thấy thông tin tài xế.");
+
+        period = (period ?? "day").ToLowerInvariant();
+        var anchor = (date ?? VnClock.Today).Date;
+        DateTime fromLocal;
+        int days;
+        switch (period)
+        {
+            case "week":
+                fromLocal = anchor.AddDays(-(((int)anchor.DayOfWeek + 6) % 7)); // thứ Hai
+                days = 7;
+                break;
+            case "month":
+                fromLocal = new DateTime(anchor.Year, anchor.Month, 1);
+                days = DateTime.DaysInMonth(anchor.Year, anchor.Month);
+                break;
+            default:
+                period = "day";
+                fromLocal = anchor;
+                days = 1;
+                break;
+        }
+        var fromUtc = VnClock.StartOfDayUtc(fromLocal);
+        var toUtc = VnClock.StartOfDayUtc(fromLocal.AddDays(days));
+
+        var bookings = await db.Bookings.AsNoTracking()
+            .Where(b => b.DriverId == driver.Id && b.Status == BookingStatus.Completed && b.FinalPrice != null)
+            .Where(b => (b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt) >= fromUtc &&
+                        (b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt) < toUtc)
+            .Select(b => new
+            {
+                b.Id, b.BookingCode, b.PickupAddress, b.DestinationAddress,
+                CompletedAt = b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt,
+                FinalPrice = b.FinalPrice!.Value, b.Discount, b.DriverPayout, b.PaymentMethod
+            })
+            .OrderByDescending(b => b.CompletedAt)
+            .ToListAsync();
+
+        var trips = bookings.Select(b =>
+        {
+            var gross = b.FinalPrice + b.Discount;
+            return new DriverEarningsTripDto
+            {
+                Id = b.Id,
+                BookingCode = b.BookingCode,
+                CompletedAt = b.CompletedAt,
+                PickupAddress = b.PickupAddress,
+                DestinationAddress = b.DestinationAddress,
+                GrossFare = gross,
+                Discount = b.Discount,
+                CustomerPaid = b.FinalPrice,
+                Commission = gross - b.DriverPayout,
+                Payout = b.DriverPayout,
+                PaymentMethod = b.PaymentMethod.ToString()
+            };
+        }).ToList();
+
+        var res = new DriverEarningsResponse
+        {
+            Period = period,
+            From = fromLocal.ToString("yyyy-MM-dd"),
+            To = fromLocal.AddDays(days - 1).ToString("yyyy-MM-dd"),
+            TripCount = trips.Count,
+            GrossFare = trips.Sum(t => t.GrossFare),
+            Commission = trips.Sum(t => t.Commission),
+            VoucherSupport = trips.Sum(t => t.Discount),
+            Payout = trips.Sum(t => t.Payout),
+            CustomerPaid = trips.Sum(t => t.CustomerPaid),
+            CashCollected = trips.Where(t => t.PaymentMethod == nameof(PaymentMethod.Cash)).Sum(t => t.CustomerPaid),
+            Trips = trips
+        };
+        res.BalanceWithPlatform = res.Payout - res.CashCollected;
+
+        if (days > 1)
+        {
+            string[] weekday = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+            for (var i = 0; i < days; i++)
+            {
+                var d = fromLocal.AddDays(i);
+                var dayTrips = trips.Where(t => VnClock.ToLocal(t.CompletedAt).Date == d).ToList();
+                res.Buckets.Add(new EarningsBucketDto
+                {
+                    Date = d.ToString("yyyy-MM-dd"),
+                    Label = period == "week" ? weekday[(int)d.DayOfWeek] : d.Day.ToString(),
+                    Trips = dayTrips.Count,
+                    Payout = dayTrips.Sum(t => t.Payout)
+                });
+            }
+        }
+
+        return BaseResponse<DriverEarningsResponse>.Ok(res);
     }
 
     public async Task<BaseResponse<List<BookingDetailResponse>>> GetDriverBookingHistoryAsync(int userId, int page, int pageSize)

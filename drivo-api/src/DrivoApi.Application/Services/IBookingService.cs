@@ -1,5 +1,6 @@
 using DrivoApi.Application.DTOs.Booking;
 using DrivoApi.Application.DTOs.Common;
+using DrivoApi.Application.DTOs.Driver;
 using DrivoApi.Application.DTOs.Tracking;
 
 namespace DrivoApi.Application.Services;
@@ -23,6 +24,7 @@ public interface IBookingService
     Task<BaseResponse<BookingDetailResponse>> UpdateBookingStatusAsync(long bookingId, int userId, string newStatus);
     Task<BaseResponse<BookingDetailResponse?>> GetDriverActiveBookingAsync(int userId);
     Task<BaseResponse<List<BookingDetailResponse>>> GetDriverBookingHistoryAsync(int userId, int page, int pageSize);
+    Task<BaseResponse<DriverEarningsResponse>> GetDriverEarningsAsync(int userId, string period, DateTime? date);
     Task<BaseResponse<object>> UpdateDriverLocationAsync(int userId, UpdateDriverLocationRequest request);
     Task<BaseResponse<bool>> RateBookingAsync(long bookingId, int customerId, byte score, string comment);
 

@@ -331,6 +331,85 @@ class BookingDetail {
   }
 }
 
+/// API trả DateTime UTC không kèm 'Z' -> ép hiểu là UTC rồi đổi sang giờ máy.
+DateTime? _utcToLocal(dynamic v) {
+  if (v == null) return null;
+  var s = v.toString();
+  if (!RegExp(r'(Z|[+-]\d\d:?\d\d)$').hasMatch(s)) s = '${s}Z';
+  return DateTime.tryParse(s)?.toLocal();
+}
+
+class EarningsTrip {
+  final int id;
+  final String bookingCode;
+  final DateTime completedAt;
+  final String pickupAddress;
+  final String destinationAddress;
+  final double grossFare;
+  final double discount;
+  final double customerPaid;
+  final double commission;
+  final double payout;
+  final String paymentMethod;
+
+  EarningsTrip.fromJson(Map<String, dynamic> j)
+      : id = _toI(j['id']) ?? 0,
+        bookingCode = j['bookingCode'] ?? '',
+        completedAt = _utcToLocal(j['completedAt']) ?? DateTime.now(),
+        pickupAddress = j['pickupAddress'] ?? '',
+        destinationAddress = j['destinationAddress'] ?? '',
+        grossFare = _toD(j['grossFare']) ?? 0,
+        discount = _toD(j['discount']) ?? 0,
+        customerPaid = _toD(j['customerPaid']) ?? 0,
+        commission = _toD(j['commission']) ?? 0,
+        payout = _toD(j['payout']) ?? 0,
+        paymentMethod = j['paymentMethod'] ?? 'Cash';
+}
+
+class EarningsBucket {
+  final String date;
+  final String label;
+  final int trips;
+  final double payout;
+
+  EarningsBucket.fromJson(Map<String, dynamic> j)
+      : date = j['date'] ?? '',
+        label = j['label'] ?? '',
+        trips = _toI(j['trips']) ?? 0,
+        payout = _toD(j['payout']) ?? 0;
+}
+
+class DriverEarnings {
+  final String period;
+  final DateTime from;
+  final DateTime to;
+  final int tripCount;
+  final double grossFare;
+  final double commission;
+  final double voucherSupport;
+  final double payout;
+  final double customerPaid;
+  final double cashCollected;
+  final double balanceWithPlatform;
+  final List<EarningsBucket> buckets;
+  final List<EarningsTrip> trips;
+
+  DriverEarnings.fromJson(Map<String, dynamic> j)
+      : period = j['period'] ?? 'day',
+        from = DateTime.tryParse(j['from'] ?? '') ?? DateTime.now(),
+        to = DateTime.tryParse(j['to'] ?? '') ?? DateTime.now(),
+        tripCount = _toI(j['tripCount']) ?? 0,
+        grossFare = _toD(j['grossFare']) ?? 0,
+        commission = _toD(j['commission']) ?? 0,
+        voucherSupport = _toD(j['voucherSupport']) ?? 0,
+        payout = _toD(j['payout']) ?? 0,
+        customerPaid = _toD(j['customerPaid']) ?? 0,
+        cashCollected = _toD(j['cashCollected']) ?? 0,
+        balanceWithPlatform = _toD(j['balanceWithPlatform']) ?? 0,
+        buckets = ((j['buckets'] as List?) ?? []).map((x) => EarningsBucket.fromJson(x)).toList(),
+        trips = ((j['trips'] as List?) ?? []).map((x) => EarningsTrip.fromJson(x)).toList();
+}
+
 class DriverProfile {
   final int driverId;
   final String fullName;
@@ -795,6 +874,9 @@ class ApiService {
       post('/driver/bookings/$id/cancel', {'reason': reason});
   static Future<Map<String, dynamic>> getDriverActiveBooking() =>
       get('/driver/bookings/active');
+  /// period: day | week | month; date: ngày bất kỳ trong kỳ (giờ VN)
+  static Future<Map<String, dynamic>> getDriverEarnings(String period, DateTime date) =>
+      get('/driver/earnings?period=$period&date=${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}');
   static Future<Map<String, dynamic>> getDriverHistory({int page = 1}) =>
       get('/driver/bookings/history?page=$page');
 

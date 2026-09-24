@@ -10,6 +10,54 @@ public class UpdateDriverProfileRequest
     public string? AvatarUrl { get; set; }
 }
 
+// ── Thu nhập tài xế theo ngày / tuần / tháng ──────────────
+public class DriverEarningsTripDto
+{
+    public long Id { get; set; }
+    public string BookingCode { get; set; } = null!;
+    public DateTime CompletedAt { get; set; }
+    public string PickupAddress { get; set; } = null!;
+    public string DestinationAddress { get; set; } = null!;
+    /// <summary>Giá trước voucher.</summary>
+    public decimal GrossFare { get; set; }
+    public decimal Discount { get; set; }
+    /// <summary>Khách thực trả = GrossFare − Discount.</summary>
+    public decimal CustomerPaid { get; set; }
+    /// <summary>Hoa hồng DRIVO trên giá trước voucher.</summary>
+    public decimal Commission { get; set; }
+    public decimal Payout { get; set; }
+    public string PaymentMethod { get; set; } = null!;
+}
+
+public class EarningsBucketDto
+{
+    public string Date { get; set; } = null!;
+    public string Label { get; set; } = null!;
+    public int Trips { get; set; }
+    public decimal Payout { get; set; }
+}
+
+public class DriverEarningsResponse
+{
+    /// <summary>day | week | month</summary>
+    public string Period { get; set; } = null!;
+    /// <summary>Ngày đầu / cuối kỳ theo giờ VN (yyyy-MM-dd, cả hai ngày đều tính).</summary>
+    public string From { get; set; } = null!;
+    public string To { get; set; } = null!;
+    public int TripCount { get; set; }
+    public decimal GrossFare { get; set; }
+    public decimal Commission { get; set; }
+    public decimal VoucherSupport { get; set; }
+    public decimal Payout { get; set; }
+    public decimal CustomerPaid { get; set; }
+    /// <summary>Tiền mặt tài xế đã thu trực tiếp từ khách.</summary>
+    public decimal CashCollected { get; set; }
+    /// <summary>Payout − CashCollected: dương = DRIVO còn phải trả tài xế; âm = tài xế cần nộp lại DRIVO.</summary>
+    public decimal BalanceWithPlatform { get; set; }
+    public List<EarningsBucketDto> Buckets { get; set; } = [];
+    public List<DriverEarningsTripDto> Trips { get; set; } = [];
+}
+
 // ── Tài xế đổi mật khẩu ───────────────────────────────────
 public class ChangePasswordRequest
 {

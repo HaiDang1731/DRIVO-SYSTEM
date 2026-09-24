@@ -104,6 +104,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
         return Ok(result);
     }
 
+    /// <summary>Thu nhập theo kỳ (day | week | month) chứa ngày date (yyyy-MM-dd, giờ VN; mặc định hôm nay)</summary>
+    [HttpGet("earnings")]
+    public async Task<IActionResult> GetEarnings([FromQuery] string period = "day", [FromQuery] DateTime? date = null)
+    {
+        var result = await bookingService.GetDriverEarningsAsync(CurrentUserId, period, date);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Lịch sử chuyến đi đã hoàn thành</summary>
     [HttpGet("bookings/history")]
     public async Task<IActionResult> GetBookingHistory([FromQuery] int page = 1, [FromQuery] int pageSize = 20)

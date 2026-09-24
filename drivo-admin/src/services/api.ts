@@ -120,6 +120,28 @@ export interface PricingRuleDto {
 
 export type PricingRuleInput = Omit<PricingRuleDto, 'id' | 'createdAt'>;
 
+export interface RevenueTotals {
+  trips: number;
+  /** Giá trước voucher */
+  grossFare: number;
+  /** Tiền voucher DRIVO chịu */
+  voucherCost: number;
+  customerPaid: number;
+  driverPayout: number;
+  /** Hoa hồng trên giá trước voucher */
+  commission: number;
+  /** DRIVO thực thu = hoa hồng − voucher */
+  platformNet: number;
+}
+
+export interface RevenueReport {
+  from: string;
+  to: string;
+  summary: RevenueTotals;
+  byDay: { date: string; totals: RevenueTotals }[];
+  byVehicleType: { vehicleType: string; totals: RevenueTotals }[];
+}
+
 let _token = localStorage.getItem('drivo_token') || '';
 
 export const api = {
@@ -229,6 +251,8 @@ export const api = {
 
   // Admin Reports
   getReportSummary: () => api.request('/admin/reports/summary'),
+  getRevenueReport: (from: string, to: string): Promise<ApiResponse<RevenueReport>> =>
+    api.request(`/admin/reports/revenue?from=${from}&to=${to}`),
 
   // Admin Settings
   getSettings: () => api.request('/admin/settings'),

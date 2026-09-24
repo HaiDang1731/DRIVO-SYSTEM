@@ -616,6 +616,74 @@ namespace DrivoApi.WebApi.Controllers
                 topDrivers
             }));
         }
+
+        /// <summary>
+        /// Doanh thu nền tảng theo ngày và loại xe trong [from, to] (yyyy-MM-dd, giờ VN, gồm cả 2 ngày; mặc định 30 ngày gần nhất).
+        /// Hoa hồng tính trên giá trước voucher; DRIVO thực thu = hoa hồng − tiền voucher DRIVO chịu.
+        /// </summary>
+        [HttpGet("revenue")]
+        public async Task<IActionResult> GetRevenueReport([FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null)
+        {
+            var toLocal = (to ?? DrivoApi.Application.Common.VnClock.Today).Date;
+            var fromLocal = (from ?? toLocal.AddDays(-29)).Date;
+            if (fromLocal > toLocal) (fromLocal, toLocal) = (toLocal, fromLocal);
+            if ((toLocal - fromLocal).TotalDays > 366)
+                return BadRequest(BaseResponse<object>.Fail("Khoảng thời gian tối đa 1 năm"));
+
+            var fromUtc = DrivoApi.Application.Common.VnClock.StartOfDayUtc(fromLocal);
+            var toUtc = DrivoApi.Application.Common.VnClock.StartOfDayUtc(toLocal.AddDays(1));
+
+            var rows = await _db.Bookings.AsNoTracking()
+                .Where(b => b.Status == BookingStatus.Completed && b.FinalPrice != null)
+                .Where(b => (b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt) >= fromUtc &&
+                            (b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt) < toUtc)
+                .Select(b => new RevenueRow(
+                    b.CompletedAt ?? b.UpdatedAt ?? b.CreatedAt,
+                    b.VehicleType,
+                    b.FinalPrice!.Value,
+                    b.Discount,
+                    b.DriverPayout))
+                .ToListAsync();
+
+            var days = (int)(toLocal - fromLocal).TotalDays + 1;
+            var byDay = Enumerable.Range(0, days).Select(i =>
+            {
+                var d = fromLocal.AddDays(i);
+                var agg = RevenueTotals.Of(rows.Where(r => DrivoApi.Application.Common.VnClock.ToLocal(r.CompletedAt).Date == d));
+                return new { date = d.ToString("yyyy-MM-dd"), totals = agg };
+            }).ToList();
+
+            var byVehicleType = rows
+                .GroupBy(r => r.VehicleType)
+                .Select(g => new { vehicleType = g.Key.ToString(), totals = RevenueTotals.Of(g) })
+                .OrderByDescending(x => x.totals.Commission)
+                .ToList();
+
+            return Ok(BaseResponse<object>.Ok(new
+            {
+                from = fromLocal.ToString("yyyy-MM-dd"),
+                to = toLocal.ToString("yyyy-MM-dd"),
+                summary = RevenueTotals.Of(rows),
+                byDay,
+                byVehicleType
+            }));
+        }
+
+        private record RevenueRow(DateTime CompletedAt, VehicleType VehicleType, decimal FinalPrice, decimal Discount, decimal DriverPayout);
+
+        private record RevenueTotals(
+            int Trips, decimal GrossFare, decimal VoucherCost, decimal CustomerPaid,
+            decimal DriverPayout, decimal Commission, decimal PlatformNet)
+        {
+            public static RevenueTotals Of(IEnumerable<RevenueRow> src)
+            {
+                var list = src.ToList();
+                var paid = list.Sum(x => x.FinalPrice);
+                var voucher = list.Sum(x => x.Discount);
+                var payout = list.Sum(x => x.DriverPayout);
+                return new RevenueTotals(list.Count, paid + voucher, voucher, paid, payout, paid + voucher - payout, paid - payout);
+            }
+        }
     }
 
     // ==========================================

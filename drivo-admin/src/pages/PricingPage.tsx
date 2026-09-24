@@ -252,8 +252,9 @@ export function PricingPage() {
               <b>Giá cuối</b> = <code>Giá ước tính + Phí đón + Phí chờ + Phí vượt quãng đường − Giảm giá</code>.
             </li>
             <li>
-              <b>Chia doanh thu</b> (chốt khi hoàn thành chuyến): nền tảng giữ <code>Giá cuối × Hoa hồng%</code> (theo loại xe),
-              phần còn lại — <code>Giá cuối − Hoa hồng</code> — là thu nhập thực của tài xế.
+              <b>Chia doanh thu</b> (chốt khi hoàn thành chuyến), tính trên <b>giá trước khuyến mãi</b>
+              (<code>Giá cuối + Giảm giá</code>): nền tảng giữ <code>× Hoa hồng%</code> (theo loại xe), phần còn lại là thu nhập
+              của tài xế. Tiền khuyến mãi do <b>DRIVO chịu toàn bộ</b>: <code>DRIVO thực thu = Hoa hồng − Giảm giá</code>.
             </li>
           </ol>
         </div>

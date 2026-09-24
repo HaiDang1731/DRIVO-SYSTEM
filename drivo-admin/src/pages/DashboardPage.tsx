@@ -6,16 +6,21 @@ export function DashboardPage() {
   const [overview, setOverview] = useState<any>(null);
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [platformToday, setPlatformToday] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      const [resOverview, resChart] = await Promise.all([
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const [resOverview, resChart, resRevenue] = await Promise.all([
         api.getDashboardOverview(),
-        api.getDashboardChart(7)
+        api.getDashboardChart(7),
+        api.getRevenueReport(today, today)
       ]);
 
       if (resOverview.success) setOverview(resOverview.data);
+      if (resRevenue.success && resRevenue.data) setPlatformToday(resRevenue.data.summary.platformNet);
       if (resChart.success) {
         // Format date for chart
         const formatted = resChart.data.map((item: any) => ({
@@ -33,7 +38,8 @@ export function DashboardPage() {
     { label: 'Tài xế', value: overview?.totalDrivers ?? '—', icon: '🚗', color: '#6C63FF' },
     { label: 'Chờ duyệt', value: overview?.totalPendingDrivers ?? '—', icon: '⏳', color: '#FFA502' },
     { label: 'Khách hàng', value: overview?.totalCustomers ?? '—', icon: '👥', color: '#00D4AA' },
-    { label: 'Doanh thu hôm nay', value: overview ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(overview.totalRevenueToday) : '—', icon: '💰', color: '#FF4757' },
+    { label: 'Tổng cước hôm nay', value: overview ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(overview.totalRevenueToday) : '—', icon: '💰', color: '#FF4757' },
+    { label: 'DRIVO thực thu hôm nay', value: platformToday != null ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(platformToday) : '—', icon: '🏦', color: '#00D4AA' },
   ];
 
   return (
