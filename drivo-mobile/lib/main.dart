@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'core/api_service.dart';
 import 'core/tracking_service.dart';
 import 'core/theme.dart';
@@ -45,53 +47,31 @@ class _RootRouterState extends State<_RootRouter> {
   }
 
   Future<void> _checkSession() async {
-    // Nếu có token hợp lệ -> tự động lấy user info
-    if (ApiService.getToken() != null) {
-      try {
-        final res = await ApiService.getMe();
-        if (res['success'] == true) {
-          await ApiService.login('', '');
-          // Dùng /auth/me để lấy role, parse từ token claims
+    // Không có token đã lưu -> thẳng ra onboarding.
+    if (ApiService.getToken() == null) {
+      if (mounted) setState(() => _checking = false);
+      return;
+    }
+    try {
+      // getMe() tự làm mới access token (401) bằng refresh token nếu hết hạn.
+      final res = await ApiService.getMe();
+      if (res['success'] == true) {
+        final prefs = await SharedPreferences.getInstance();
+        final userJson = prefs.getString('user_json');
+        if (userJson != null) {
+          final user = AuthUser.fromJson(Map<String, dynamic>.from(jsonDecode(userJson)));
           if (mounted) {
             setState(() {
-              // getMe chỉ trả roles & userId, cần đọc từ saved prefs hoặc re-login
-              // Tạm thời load từ SharedPreferences nếu có
+              _user = user;
               _checking = false;
             });
-            // Thử lấy user đầy đủ từ saved token
-            await _loadUserFromToken();
             return;
           }
         }
-      } catch (_) {}
-    }
-    if (mounted) setState(() => _checking = false);
-  }
-
-  Future<void> _loadUserFromToken() async {
-    try {
-      // Gọi /auth/me để lấy userId và roles
-      final meRes = await ApiService.getMe();
-      if (meRes['success'] == true) {
-        // Build minimal AuthUser từ data /me
-        final data = meRes['data'] ?? meRes;
-        final userId = int.tryParse(data['userId']?.toString() ?? '0') ?? 0;
-        final roles = List<String>.from(data['roles'] ?? []);
-
-        if (mounted && userId > 0) {
-          setState(() {
-            _user = AuthUser(
-              id: userId,
-              fullName: '',   // Sẽ load từ profile sau
-              phone: '',
-              roles: roles,
-            );
-            _checking = false;
-          });
-          return;
-        }
       }
     } catch (_) {}
+    // Token/refresh token đều không còn dùng được -> đăng xuất hẳn để tránh trạng thái lưng chừng.
+    await ApiService.clearTokens();
     if (mounted) setState(() => _checking = false);
   }
 

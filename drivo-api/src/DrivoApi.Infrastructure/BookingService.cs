@@ -492,6 +492,12 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (driver == null)
             return BaseResponse<bool>.Fail("Không tìm thấy thông tin tài xế.");
 
+        if (isOnline && driver.VerificationStatus != VerificationStatus.Approved)
+            return BaseResponse<bool>.Fail("Tài khoản tài xế chưa được duyệt, chưa thể bật trực tuyến.");
+
+        if (!isOnline && driver.DriverStatus == DriverStatus.Busy)
+            return BaseResponse<bool>.Fail("Bạn đang có cuốc chưa hoàn thành, không thể ngoại tuyến.");
+
         var hasLocation = latitude.HasValue && longitude.HasValue && GeoUtils.IsValid(latitude.Value, longitude.Value);
         var now = DateTime.UtcNow;
 
@@ -572,14 +578,46 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (hasActive)
             return BaseResponse<BookingDetailResponse>.Fail("Bạn đang có cuốc chưa hoàn thành.");
 
-        var booking = await db.Bookings
-            .Include(b => b.CustomerVehicle)
-            .FirstOrDefaultAsync(b => b.Id == bookingId && b.Status == BookingStatus.SearchingDriver && b.DriverId == null);
+        var now = DateTime.UtcNow;
 
-        if (booking == null)
+        // Giành cuốc bằng 1 UPDATE có điều kiện ở DB (atomic) -> 2 tài xế bấm nhận cùng lúc
+        // chỉ 1 người giành được; nếu dùng SaveChangesAsync bình thường (đọc rồi ghi) người ghi
+        // sau sẽ âm thầm đè lên người ghi trước mà không có lỗi gì (không có RowVersion).
+        var claimed = await db.Bookings
+            .Where(b => b.Id == bookingId && b.Status == BookingStatus.SearchingDriver && b.DriverId == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(b => b.DriverId, driver.Id)
+                .SetProperty(b => b.Status, BookingStatus.DriverAccepted)
+                .SetProperty(b => b.AcceptedAt, now)
+                .SetProperty(b => b.UpdatedAt, now));
+
+        if (claimed == 0)
             return BaseResponse<BookingDetailResponse>.Fail("Cuốc xe không còn khả dụng.");
 
-        // Chặng đón: tài xế (xe điện gấp) → điểm đón
+        // Cùng lý do: giành quyền "bận" cho tài xế để tránh 1 tài xế nhận trúng 2 cuốc cùng lúc.
+        var driverClaimed = await db.Drivers
+            .Where(d => d.Id == driver.Id && d.DriverStatus == DriverStatus.Online)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.DriverStatus, DriverStatus.Busy)
+                .SetProperty(d => d.UpdatedAt, now));
+
+        if (driverClaimed == 0)
+        {
+            // Tài xế vừa nhận một cuốc khác đúng lúc này -> nhả lại cuốc vừa giành cho người khác.
+            await db.Bookings
+                .Where(b => b.Id == bookingId && b.DriverId == driver.Id && b.Status == BookingStatus.DriverAccepted)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(b => b.DriverId, (int?)null)
+                    .SetProperty(b => b.Status, BookingStatus.SearchingDriver)
+                    .SetProperty(b => b.AcceptedAt, (DateTime?)null));
+            return BaseResponse<BookingDetailResponse>.Fail("Bạn vừa nhận một cuốc khác.");
+        }
+
+        var booking = await db.Bookings
+            .Include(b => b.CustomerVehicle)
+            .FirstAsync(b => b.Id == bookingId);
+
+        // Chặng đón: tài xế (xe điện gấp) → điểm đón. Chỉ mình tài xế này còn giữ cuốc nên an toàn để ghi tiếp.
         if (driver.CurrentLatitude is { } dLat && driver.CurrentLongitude is { } dLng &&
             GeoUtils.IsValid(dLat, dLng) && GeoUtils.IsValid(booking.PickupLatitude, booking.PickupLongitude))
         {
@@ -589,22 +627,13 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
                 (double)booking.PickupLatitude, (double)booking.PickupLongitude, "TWO_WHEELER");
             booking.PickupDistanceKm = pickupRoute.DistanceKm;
             booking.PickupFee = CalcPickupFee(pickupRoute.DistanceKm, rule);
+            booking.UpdatedAt = DateTime.UtcNow;
         }
-
-        var now = DateTime.UtcNow;
-        var oldStatus = booking.Status;
-        booking.DriverId = driver.Id;
-        booking.Status = BookingStatus.DriverAccepted;
-        booking.AcceptedAt = now;
-        booking.UpdatedAt = now;
-
-        driver.DriverStatus = DriverStatus.Busy;
-        driver.UpdatedAt = now;
 
         db.BookingStatusHistories.Add(new BookingStatusHistory
         {
             BookingId = booking.Id,
-            OldStatus = DrivoDbContext.ToSnakeUpper(oldStatus.ToString()),
+            OldStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.SearchingDriver.ToString()),
             NewStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.DriverAccepted.ToString()),
             ChangedByUserId = userId,
             Reason = "Tài xế nhận cuốc",
@@ -875,11 +904,16 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
     }
 
 
-    public async Task<BaseResponse<bool>> RateBookingAsync(long bookingId, int customerId, byte score, string comment)
+    public async Task<BaseResponse<bool>> RateBookingAsync(long bookingId, int userId, byte score, string comment)
     {
+        // userId là User.Id (JWT); Booking.CustomerId trỏ tới Customer.Id, khác bảng.
+        var customer = await db.Customers.FirstOrDefaultAsync(c => c.UserId == userId);
+        if (customer == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy thông tin khách hàng.");
+
         var booking = await db.Bookings
             .Include(b => b.Trip)
-            .FirstOrDefaultAsync(b => b.Id == bookingId && b.CustomerId == customerId);
+            .FirstOrDefaultAsync(b => b.Id == bookingId && b.CustomerId == customer.Id);
 
         if (booking == null)
             return BaseResponse<bool>.Fail("Không tìm thấy chuyến đi.");
@@ -897,7 +931,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var rating = new Rating
         {
             TripId = booking.Trip.Id,
-            CustomerId = customerId,
+            CustomerId = customer.Id,
             DriverId = booking.Trip.DriverId,
             Score = score,
             Comment = comment,

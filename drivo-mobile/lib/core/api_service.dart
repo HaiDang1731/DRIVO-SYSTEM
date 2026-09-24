@@ -560,17 +560,7 @@ class ApiService {
     if (_token != null) 'Authorization': 'Bearer $_token',
   };
 
-  static Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl$path'),
-      headers: _headers,
-      body: jsonEncode(body),
-    );
-    return jsonDecode(utf8.decode(res.bodyBytes));
-  }
-
-  static Future<Map<String, dynamic>> get(String path) async {
-    final res = await http.get(Uri.parse('$baseUrl$path'), headers: _headers);
+  static Map<String, dynamic> _decode(http.Response res) {
     final body = utf8.decode(res.bodyBytes).trim();
     if (body.isEmpty) return {'success': false, 'message': 'Empty response'};
     try {
@@ -580,18 +570,69 @@ class ApiService {
     }
   }
 
-  static Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) async {
-    final res = await http.put(
+  /// Refresh token đang chạy dở (gộp các lệnh gọi song song bị 401 cùng lúc thành 1 lần refresh).
+  static Future<bool>? _refreshing;
+
+  /// Làm mới access token bằng refresh token đã lưu. true nếu thành công.
+  static Future<bool> _refreshAccessToken() {
+    return _refreshing ??= () async {
+      final rt = _refreshToken;
+      if (rt == null || rt.isEmpty) return false;
+      try {
+        final res = await http.post(
+          Uri.parse('$baseUrl/auth/refresh'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'refreshToken': rt}),
+        );
+        final data = _decode(res);
+        if (res.statusCode == 200 && data['success'] == true) {
+          final d = data['data'];
+          if (d != null && d['accessToken'] != null && d['refreshToken'] != null) {
+            await saveTokens(d['accessToken'], d['refreshToken']);
+            return true;
+          }
+        }
+      } catch (_) {}
+      return false;
+    }()
+      ..whenComplete(() => _refreshing = null);
+  }
+
+  /// Gửi request có xác thực; nếu bị 401 (token hết hạn) thì tự refresh rồi thử lại đúng 1 lần.
+  static Future<http.Response> _send(Future<http.Response> Function() request) async {
+    var res = await request();
+    if (res.statusCode == 401 && _refreshToken != null) {
+      if (await _refreshAccessToken()) res = await request();
+    }
+    return res;
+  }
+
+  static Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
+    final res = await _send(() => http.post(
       Uri.parse('$baseUrl$path'),
       headers: _headers,
       body: jsonEncode(body),
-    );
-    return jsonDecode(utf8.decode(res.bodyBytes));
+    ));
+    return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> get(String path) async {
+    final res = await _send(() => http.get(Uri.parse('$baseUrl$path'), headers: _headers));
+    return _decode(res);
+  }
+
+  static Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) async {
+    final res = await _send(() => http.put(
+      Uri.parse('$baseUrl$path'),
+      headers: _headers,
+      body: jsonEncode(body),
+    ));
+    return _decode(res);
   }
 
   static Future<Map<String, dynamic>> delete(String path) async {
-    final res = await http.delete(Uri.parse('$baseUrl$path'), headers: _headers);
-    return jsonDecode(utf8.decode(res.bodyBytes));
+    final res = await _send(() => http.delete(Uri.parse('$baseUrl$path'), headers: _headers));
+    return _decode(res);
   }
 
   // Auth
