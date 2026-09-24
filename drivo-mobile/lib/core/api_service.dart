@@ -402,6 +402,8 @@ class DriverBooking {
   final double extraDistanceFee;
   final double discount;
   final double? actualDistanceKm;
+  final double commissionAmount;
+  final double driverPayout;
   final String? customerName;
   final String? customerPhone;
 
@@ -433,6 +435,8 @@ class DriverBooking {
     this.extraDistanceFee = 0,
     this.discount = 0,
     this.actualDistanceKm,
+    this.commissionAmount = 0,
+    this.driverPayout = 0,
     this.customerName,
     this.customerPhone,
   });
@@ -460,6 +464,8 @@ class DriverBooking {
       extraDistanceFee: _toD(j['extraDistanceFee']) ?? 0,
       discount: _toD(j['discount']) ?? 0,
       actualDistanceKm: _toD(j['actualDistanceKm']),
+      commissionAmount: _toD(j['commissionAmount']) ?? 0,
+      driverPayout: _toD(j['driverPayout']) ?? 0,
       customerName: c is Map ? c['fullName'] : j['customerName'],
       customerPhone: c is Map ? c['phone'] : j['customerPhone'],
       id: j['id'],

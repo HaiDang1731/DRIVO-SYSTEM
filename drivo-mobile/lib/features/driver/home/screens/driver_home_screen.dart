@@ -1195,7 +1195,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
                 money(b.extraDistanceFee)),
           if (b.discount > 0) row('Giảm giá', '-${money(b.discount)}', color: DrivoColors.success),
           const Divider(color: DrivoColors.border),
-          row('Khách thanh toán', money(total), bold: true, color: DrivoColors.success),
+          row('Khách thanh toán', money(total), bold: true),
+          if (b.commissionAmount > 0)
+            row('Hoa hồng nền tảng DRIVO', '-${money(b.commissionAmount)}', color: DrivoColors.danger),
+          row('Bạn thực nhận', money(b.driverPayout > 0 ? b.driverPayout : total),
+              bold: true, color: DrivoColors.success),
         ]),
         actions: [
           // actions là một hàng ngang -> phải bỏ minimumSize width = infinity của theme.

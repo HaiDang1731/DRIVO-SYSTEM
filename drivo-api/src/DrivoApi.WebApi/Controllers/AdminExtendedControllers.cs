@@ -270,10 +270,13 @@ namespace DrivoApi.WebApi.Controllers
         private static string? ValidatePricing(PricingRuleUpsertRequest r)
         {
             if (r.BaseFare < 0 || r.PricePerKm < 0 || r.PricePerMinute < 0 || r.NightSurcharge < 0 || r.WaitingPricePerMin < 0 ||
-                r.FreePickupKm < 0 || r.PickupFeePerKm < 0 || r.FreeWaitingMin < 0 || r.OverDistanceTolerancePercent < 0)
+                r.FreePickupKm < 0 || r.PickupFeePerKm < 0 || r.FreeWaitingMin < 0 || r.OverDistanceTolerancePercent < 0 ||
+                r.CommissionPercent < 0)
                 return "Giá trị bảng giá không được âm";
             if (r.FreePickupKm > 9999 || r.OverDistanceTolerancePercent > 999)
                 return "Giá trị bảng giá vượt giới hạn cho phép";
+            if (r.CommissionPercent > 100)
+                return "Hoa hồng nền tảng không được vượt quá 100%";
             return null;
         }
 
@@ -300,6 +303,7 @@ namespace DrivoApi.WebApi.Controllers
                 PickupFeePerKm = req.PickupFeePerKm ?? 5000m,
                 FreeWaitingMin = req.FreeWaitingMin ?? 10,
                 OverDistanceTolerancePercent = req.OverDistanceTolerancePercent ?? 10m,
+                CommissionPercent = req.CommissionPercent ?? 15m,
                 IsActive = req.IsActive,
                 EffectiveFrom = effectiveFrom,
                 EffectiveTo = req.EffectiveTo,
@@ -334,6 +338,7 @@ namespace DrivoApi.WebApi.Controllers
             if (updated.PickupFeePerKm.HasValue) rule.PickupFeePerKm = updated.PickupFeePerKm.Value;
             if (updated.FreeWaitingMin.HasValue) rule.FreeWaitingMin = updated.FreeWaitingMin.Value;
             if (updated.OverDistanceTolerancePercent.HasValue) rule.OverDistanceTolerancePercent = updated.OverDistanceTolerancePercent.Value;
+            if (updated.CommissionPercent.HasValue) rule.CommissionPercent = updated.CommissionPercent.Value;
             rule.IsActive = updated.IsActive;
             rule.EffectiveFrom = effectiveFrom;
             rule.EffectiveTo = effectiveTo;

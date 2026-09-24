@@ -5,7 +5,7 @@ import { formatVND, round1000, vehicleTypeLabel } from '../utils/geo';
 
 type NumField = Exclude<keyof PricingRuleInput, 'vehicleType' | 'isActive' | 'effectiveFrom' | 'effectiveTo'>;
 
-const FIELDS: { key: NumField; label: string; unit: string; step?: number; group: 'trip' | 'pickup' | 'wait' }[] = [
+const FIELDS: { key: NumField; label: string; unit: string; step?: number; group: 'trip' | 'pickup' | 'wait' | 'commission' }[] = [
   { key: 'baseFare', label: 'Cước mở cửa', unit: 'đ', group: 'trip' },
   { key: 'pricePerKm', label: 'Giá mỗi km (sau 2 km đầu)', unit: 'đ/km', group: 'trip' },
   { key: 'pricePerMinute', label: 'Giá mỗi phút', unit: 'đ/phút', step: 100, group: 'trip' },
@@ -15,12 +15,14 @@ const FIELDS: { key: NumField; label: string; unit: string; step?: number; group
   { key: 'pickupFeePerKm', label: 'Phí đón mỗi km vượt', unit: 'đ/km', group: 'pickup' },
   { key: 'freeWaitingMin', label: 'Phút chờ miễn phí', unit: 'phút', step: 1, group: 'wait' },
   { key: 'waitingPricePerMin', label: 'Phí chờ mỗi phút vượt', unit: 'đ/phút', group: 'wait' },
+  { key: 'commissionPercent', label: 'Hoa hồng nền tảng DRIVO', unit: '%', step: 0.5, group: 'commission' },
 ];
 
 const GROUP_TITLES = {
   trip: '🚗 Chặng chính (lái xe của khách)',
   pickup: '🛴 Chặng đón (xe điện gấp)',
   wait: '⏱️ Thời gian chờ',
+  commission: '💼 Hoa hồng nền tảng',
 };
 
 const VEHICLE_OPTIONS = ['Car', 'Suv', 'Truck', 'Motorbike', 'Other'];
@@ -36,6 +38,7 @@ const DEFAULTS: PricingRuleInput = {
   pickupFeePerKm: 5000,
   freeWaitingMin: 10,
   overDistanceTolerancePercent: 10,
+  commissionPercent: 15,
   isActive: true,
 };
 
@@ -58,6 +61,7 @@ function normalize(r: Partial<PricingRuleDto>): PricingRuleDto {
     pickupFeePerKm: num(r.pickupFeePerKm, DEFAULTS.pickupFeePerKm),
     freeWaitingMin: num(r.freeWaitingMin, DEFAULTS.freeWaitingMin),
     overDistanceTolerancePercent: num(r.overDistanceTolerancePercent, DEFAULTS.overDistanceTolerancePercent),
+    commissionPercent: num(r.commissionPercent, DEFAULTS.commissionPercent),
     isActive: !!r.isActive,
     effectiveFrom: r.effectiveFrom,
     effectiveTo: r.effectiveTo,
@@ -137,7 +141,9 @@ export function PricingPage() {
     const threshold = km * (1 + r.overDistanceTolerancePercent / 100);
     const extraFee = calc.actualKm > threshold ? round1000((calc.actualKm - km) * r.pricePerKm) : 0;
     const final = estimated + pickupFee + waitingFee + extraFee;
-    return { baseFare, distanceFare, timeFare, night, estimated, pickupFee, waitingFee, extraFee, threshold, final };
+    const commission = round1000(final * r.commissionPercent / 100);
+    const driverPayout = final - commission;
+    return { baseFare, distanceFare, timeFare, night, estimated, pickupFee, waitingFee, extraFee, threshold, final, commission, driverPayout };
   }, [calcRule, calc]);
 
   const setCalcField = (k: keyof typeof calc, v: string | boolean) =>
@@ -181,6 +187,7 @@ export function PricingPage() {
                   <th>Chờ miễn phí</th>
                   <th>Phí chờ / phút</th>
                   <th>Dung sai km</th>
+                  <th>Hoa hồng DRIVO</th>
                   <th>Trạng thái</th>
                   <th>Thao tác</th>
                 </tr>
@@ -198,6 +205,7 @@ export function PricingPage() {
                     <td>{r.freeWaitingMin} phút</td>
                     <td>{formatVND(r.waitingPricePerMin)}</td>
                     <td>{r.overDistanceTolerancePercent}%</td>
+                    <td><strong style={{ color: 'var(--accent)' }}>{r.commissionPercent}%</strong></td>
                     <td><Badge type={r.isActive ? 'success' : 'danger'}>{r.isActive ? 'Đang áp dụng' : 'Tạm dừng'}</Badge></td>
                     <td>
                       <div className="btn-row">
@@ -242,6 +250,10 @@ export function PricingPage() {
             </li>
             <li>
               <b>Giá cuối</b> = <code>Giá ước tính + Phí đón + Phí chờ + Phí vượt quãng đường − Giảm giá</code>.
+            </li>
+            <li>
+              <b>Chia doanh thu</b> (chốt khi hoàn thành chuyến): nền tảng giữ <code>Giá cuối × Hoa hồng%</code> (theo loại xe),
+              phần còn lại — <code>Giá cuối − Hoa hồng</code> — là thu nhập thực của tài xế.
             </li>
           </ol>
         </div>
@@ -313,6 +325,11 @@ export function PricingPage() {
                       <td className="fee-value">{formatVND(result.extraFee)}</td>
                     </tr>
                     <tr className="fee-strong"><td>Giá cuối (chưa trừ giảm giá)</td><td className="fee-value">{formatVND(result.final)}</td></tr>
+                    <tr>
+                      <td>Hoa hồng nền tảng DRIVO <div className="fee-note">Giá cuối × {calcRule.commissionPercent}%</div></td>
+                      <td className="fee-value" style={{ color: 'var(--danger, #FF4757)' }}>− {formatVND(result.commission)}</td>
+                    </tr>
+                    <tr className="fee-strong"><td>Tài xế thực nhận</td><td className="fee-value" style={{ color: '#00D4AA' }}>{formatVND(result.driverPayout)}</td></tr>
                   </tbody>
                 </table>
               )}
@@ -356,7 +373,7 @@ export function PricingPage() {
                   </label>
                 </div>
               </div>
-              {(['trip', 'pickup', 'wait'] as const).map((g) => (
+              {(['trip', 'pickup', 'wait', 'commission'] as const).map((g) => (
                 <div key={g}>
                   <div className="form-group-title">{GROUP_TITLES[g]}</div>
                   <div className="calc-grid">

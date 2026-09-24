@@ -78,6 +78,8 @@ export interface AdminBookingDetail {
   extraDistanceFee?: number;
   discount?: number;
   actualDistanceKm?: number | null;
+  commissionAmount?: number;
+  driverPayout?: number;
   acceptedAt?: string | null;
   arrivedAt?: string | null;
   startedAt?: string | null;
@@ -108,6 +110,8 @@ export interface PricingRuleDto {
   pickupFeePerKm: number;
   freeWaitingMin: number;
   overDistanceTolerancePercent: number;
+  /** % nền tảng DRIVO giữ lại trên giá cuối cùng, còn lại là thu nhập tài xế. */
+  commissionPercent: number;
   isActive: boolean;
   effectiveFrom?: string;
   effectiveTo?: string | null;

@@ -123,6 +123,10 @@ export function BookingDetailPage() {
     { label: 'Phí vượt quãng đường (ExtraDistanceFee)', value: data.extraDistanceFee },
     { label: 'Giảm giá (Discount)', value: data.discount, negative: true },
     { label: 'Giá cuối cùng (FinalPrice)', value: data.finalPrice, strong: true },
+    ...(data.finalPrice != null ? [
+      { label: 'Hoa hồng nền tảng DRIVO (CommissionAmount)', value: data.commissionAmount, negative: true },
+      { label: 'Tài xế thực nhận (DriverPayout)', value: data.driverPayout, strong: true },
+    ] : []),
   ];
 
   return (

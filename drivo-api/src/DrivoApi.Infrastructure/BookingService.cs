@@ -345,6 +345,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             var driver = await db.Drivers.FirstOrDefaultAsync(d => d.Id == booking.DriverId.Value);
             if (driver != null && driver.DriverStatus == DriverStatus.Busy)
             {
+                LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, "Khách hủy chuyến", DateTime.UtcNow);
                 driver.DriverStatus = DriverStatus.Online;
                 driver.UpdatedAt = DateTime.UtcNow;
             }
@@ -385,6 +386,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         booking.CancelledAt = DateTime.UtcNow;
         booking.UpdatedAt = DateTime.UtcNow;
 
+        LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, req.Reason ?? "Tài xế hủy chuyến", DateTime.UtcNow);
         driver.DriverStatus = DriverStatus.Online;
         driver.UpdatedAt = DateTime.UtcNow;
 
@@ -451,6 +453,8 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         dto.ExtraDistanceFee = b.ExtraDistanceFee;
         dto.Discount = b.Discount;
         dto.ActualDistanceKm = b.ActualDistanceKm;
+        dto.CommissionAmount = b.CommissionAmount;
+        dto.DriverPayout = b.DriverPayout;
         dto.AcceptedAt = b.AcceptedAt;
         dto.ArrivedAt = b.ArrivedAt;
         dto.StartedAt = b.StartedAt;
@@ -501,7 +505,10 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var hasLocation = latitude.HasValue && longitude.HasValue && GeoUtils.IsValid(latitude.Value, longitude.Value);
         var now = DateTime.UtcNow;
 
-        driver.DriverStatus = isOnline ? DriverStatus.Online : DriverStatus.Offline;
+        var newStatus = isOnline ? DriverStatus.Online : DriverStatus.Offline;
+        LogDriverStatusChange(driver.Id, driver.DriverStatus, newStatus,
+            isOnline ? "Tài xế bật trực tuyến" : "Tài xế tắt trực tuyến", now);
+        driver.DriverStatus = newStatus;
         driver.UpdatedAt = now;
         if (hasLocation)
         {
@@ -617,6 +624,9 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .Include(b => b.CustomerVehicle)
             .FirstAsync(b => b.Id == bookingId);
 
+        // ExecuteUpdateAsync không đụng tới entity đang track -> driver.DriverStatus trong bộ nhớ vẫn là Online.
+        LogDriverStatusChange(driver.Id, DriverStatus.Online, DriverStatus.Busy, $"Nhận chuyến {booking.BookingCode}", now);
+
         // Chặng đón: tài xế (xe điện gấp) → điểm đón. Chỉ mình tài xế này còn giữ cuốc nên an toàn để ghi tiếp.
         if (driver.CurrentLatitude is { } dLat && driver.CurrentLongitude is { } dLng &&
             GeoUtils.IsValid(dLat, dLng) && GeoUtils.IsValid(booking.PickupLatitude, booking.PickupLongitude))
@@ -708,6 +718,21 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         return BaseResponse<BookingDetailResponse>.Ok(MapToDetailResponse(booking));
     }
 
+    /// <summary>Ghi lịch sử đổi DriverStatus (Online/Busy/Offline) để hiển thị ở trang chi tiết tài xế trên admin.</summary>
+    private void LogDriverStatusChange(int driverId, DriverStatus oldStatus, DriverStatus newStatus, string? reason, DateTime at)
+    {
+        if (oldStatus == newStatus) return;
+        // CK_DriverStatusHistory_* chỉ chấp nhận 'ONLINE' | 'BUSY' | 'OFFLINE' | 'SUSPENDED'.
+        db.DriverStatusHistories.Add(new DriverStatusHistory
+        {
+            DriverId = driverId,
+            OldStatus = oldStatus.ToString().ToUpperInvariant(),
+            NewStatus = newStatus.ToString().ToUpperInvariant(),
+            Reason = reason,
+            ChangedAt = at
+        });
+    }
+
     /// <summary>Chốt giá khi hoàn thành: phí chờ, quãng đường thực tế (GPS), phụ phí vượt quãng đường, Trip.</summary>
     private async Task CompleteBookingAsync(Booking booking, Driver driver, DateTime now)
     {
@@ -734,8 +759,13 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         booking.FinalPrice = Math.Max(0m,
             booking.EstimatedPrice + booking.PickupFee + booking.WaitingFee + booking.ExtraDistanceFee - booking.Discount);
 
+        // Chia doanh thu: nền tảng giữ CommissionPercent trên giá cuối cùng, còn lại là thu nhập tài xế.
+        booking.CommissionAmount = GeoUtils.Round1000(booking.FinalPrice.Value * rule.CommissionPercent / 100m);
+        booking.DriverPayout = booking.FinalPrice.Value - booking.CommissionAmount;
+
         driver.TotalTrips += 1;
-        driver.TotalEarnings += booking.FinalPrice.Value;
+        driver.TotalEarnings += booking.DriverPayout;
+        LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, $"Hoàn thành chuyến {booking.BookingCode}", now);
         driver.DriverStatus = DriverStatus.Online;
         driver.UpdatedAt = now;
 
@@ -1048,6 +1078,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             var driver = await db.Drivers.FirstOrDefaultAsync(d => d.Id == booking.DriverId.Value);
             if (driver != null && driver.DriverStatus == DriverStatus.Busy)
             {
+                LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, "Admin hủy chuyến", now);
                 driver.DriverStatus = DriverStatus.Online;
                 driver.UpdatedAt = now;
             }

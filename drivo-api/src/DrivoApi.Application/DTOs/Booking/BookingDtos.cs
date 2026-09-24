@@ -102,6 +102,10 @@ public class BookingDetailResponse
     public decimal ExtraDistanceFee { get; set; }
     public decimal Discount { get; set; }
     public decimal? ActualDistanceKm { get; set; }
+    /// <summary>Phần nền tảng DRIVO giữ lại trên FinalPrice (chỉ có giá trị sau khi hoàn thành chuyến).</summary>
+    public decimal CommissionAmount { get; set; }
+    /// <summary>Thu nhập thực nhận của tài xế = FinalPrice - CommissionAmount.</summary>
+    public decimal DriverPayout { get; set; }
     public DateTime? AcceptedAt { get; set; }
     public DateTime? ArrivedAt { get; set; }
     public DateTime? StartedAt { get; set; }

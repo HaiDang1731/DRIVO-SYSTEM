@@ -32,6 +32,10 @@ public class Booking
     public decimal EstimatedPrice { get; set; }
     public decimal? FinalPrice { get; set; }
 
+    // Chia doanh thu nền tảng/tài xế, chốt cùng lúc với FinalPrice khi hoàn thành chuyến.
+    public decimal CommissionAmount { get; set; }
+    public decimal DriverPayout { get; set; }
+
     // Pickup leg (driver scooter -> pickup), waiting & over-distance fees
     public decimal? PickupDistanceKm { get; set; }
     public decimal PickupFee { get; set; }

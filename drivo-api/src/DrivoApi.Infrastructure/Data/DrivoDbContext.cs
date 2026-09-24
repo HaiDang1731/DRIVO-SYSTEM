@@ -169,6 +169,7 @@ public class DrivoDbContext(DbContextOptions<DrivoDbContext> options) : DbContex
         {
             e.Property(p => p.FreePickupKm).HasPrecision(6, 2);
             e.Property(p => p.OverDistanceTolerancePercent).HasPrecision(5, 2);
+            e.Property(p => p.CommissionPercent).HasPrecision(5, 2);
         });
 
         // Table name mappings (matching exact database tables)

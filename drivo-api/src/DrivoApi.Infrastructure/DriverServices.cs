@@ -260,12 +260,54 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
         LicenseClass = d.LicenseClass,
         VerificationStatus = d.VerificationStatus.ToString(),
         DriverStatus = d.DriverStatus.ToString(),
-                  AccountStatus = d.User.Status.ToString(),
+        AccountStatus = d.User.Status.ToString(),
         RatingAverage = d.RatingAverage,
+        RatingCount = d.RatingCount,
         TotalTrips = d.TotalTrips,
+        // TotalEarnings đã là thu nhập thực của tài xế (sau khi trừ hoa hồng nền tảng), cộng dồn khi hoàn thành chuyến.
+        TotalEarnings = d.TotalEarnings,
+        TotalDistanceKm = d.Bookings
+            .Where(b => b.Status == BookingStatus.Completed)
+            .Sum(b => b.ActualDistanceKm ?? b.EstimatedDistanceKm ?? 0m),
+        LastLoginAt = u.LastLoginAt,
         CreatedAt = d.CreatedAt,
         UpdatedAt = d.UpdatedAt,
-        Documents = docs.Select(MapToDocDto).ToList()
+        Documents = docs.Select(MapToDocDto).ToList(),
+        StatusHistory = d.StatusHistory
+            .OrderByDescending(h => h.ChangedAt)
+            .Select(h => new DriverStatusHistoryDto
+            {
+                Id = h.Id,
+                OldStatus = h.OldStatus,
+                NewStatus = h.NewStatus,
+                ChangedAt = h.ChangedAt,
+                Reason = h.Reason
+            }).ToList(),
+        Trips = d.Bookings
+            .OrderByDescending(b => b.CreatedAt)
+            .Select(b => new DriverTripSummaryDto
+            {
+                Id = b.Id,
+                BookingCode = b.BookingCode,
+                PickupAddress = b.PickupAddress,
+                DestinationAddress = b.DestinationAddress,
+                DistanceKm = b.ActualDistanceKm ?? b.EstimatedDistanceKm,
+                Amount = b.FinalPrice ?? b.EstimatedPrice,
+                Status = b.Status.ToString(),
+                CustomerName = b.Customer?.User?.FullName,
+                CustomerPhone = b.Customer?.User?.Phone,
+                CreatedAt = b.CreatedAt
+            }).ToList(),
+        Ratings = d.Ratings
+            .OrderByDescending(r => r.CreatedAt)
+            .Select(r => new DriverRatingSummaryDto
+            {
+                Id = r.Id,
+                Score = r.Score,
+                Comment = r.Comment,
+                CustomerName = r.Customer?.User?.FullName ?? "Khách hàng",
+                CreatedAt = r.CreatedAt
+            }).ToList()
     };
 
     private static DriverDocumentDto MapToDocDto(DriverDocument doc) => new()

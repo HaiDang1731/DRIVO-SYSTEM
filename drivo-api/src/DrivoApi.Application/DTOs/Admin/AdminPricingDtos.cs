@@ -18,6 +18,8 @@ public class PricingRuleUpsertRequest
     public decimal? PickupFeePerKm { get; set; }
     public int? FreeWaitingMin { get; set; }
     public decimal? OverDistanceTolerancePercent { get; set; }
+    /// <summary>% nền tảng DRIVO giữ lại trên giá cuối cùng của chuyến, riêng theo từng loại xe.</summary>
+    public decimal? CommissionPercent { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime? EffectiveFrom { get; set; }
     public DateTime? EffectiveTo { get; set; }
