@@ -334,6 +334,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
               ],
               const SizedBox(height: 14),
 
+              // Tên khách (SĐT chỉ hiện sau khi nhận cuốc)
+              if (offer.customerName != null) ...[
+                Row(children: [
+                  const Icon(Icons.person_outline, color: DrivoColors.textMuted, size: 18),
+                  const SizedBox(width: 8),
+                  Text('Khách: ', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 13)),
+                  Expanded(
+                    child: Text(offer.customerName!,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 13.5, fontWeight: FontWeight.w700)),
+                  ),
+                  Text('SĐT hiện sau khi nhận',
+                      style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+                ]),
+                const SizedBox(height: 10),
+              ],
+
               // Khoảng cách từ tài xế tới điểm đón (server tính theo vị trí GPS gần nhất)
               if (offer.distanceToPickupKm != null) ...[
                 Container(
@@ -907,6 +924,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           ),
           const SizedBox(height: 16),
 
+          // Liên hệ khách: gọi xác nhận chuyến / báo đã tới điểm đón
+          if (b.customerName != null || b.customerPhone != null) ...[
+            _CustomerContactCard(name: b.customerName, phone: b.customerPhone),
+            const SizedBox(height: 16),
+          ],
+
           // Trip info
           DrivoCard(
             child: Column(children: [
@@ -1352,6 +1375,70 @@ class _TripRouteRow extends StatelessWidget {
       ])),
     ]),
   );
+}
+
+/// Thẻ liên hệ khách trên màn chuyến đang chạy: gọi điện / nhắn tin.
+class _CustomerContactCard extends StatelessWidget {
+  final String? name;
+  final String? phone;
+  const _CustomerContactCard({required this.name, required this.phone});
+
+  Future<void> _open(BuildContext context, String scheme) async {
+    final p = phone;
+    if (p == null || p.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    var ok = false;
+    try {
+      ok = await launchUrl(Uri(scheme: scheme, path: p));
+    } catch (_) {}
+    if (!ok) {
+      messenger.showSnackBar(SnackBar(content: Text('SĐT khách: $p'), duration: const Duration(seconds: 6)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = (name ?? '').trim().isEmpty ? '?' : name!.trim().split(' ').last[0].toUpperCase();
+    Widget roundButton(IconData icon, Color color, String tooltip, VoidCallback? onTap) => Tooltip(
+          message: tooltip,
+          child: Material(
+            color: color.withValues(alpha: 0.15),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTap,
+              child: Padding(padding: const EdgeInsets.all(11), child: Icon(icon, color: color, size: 20)),
+            ),
+          ),
+        );
+
+    return DrivoCard(
+      padding: const EdgeInsets.all(14),
+      child: Row(children: [
+        CircleAvatar(
+          radius: 22,
+          backgroundColor: DrivoColors.primary.withValues(alpha: 0.2),
+          child: Text(initial, style: const TextStyle(color: DrivoColors.primary, fontWeight: FontWeight.w800)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Khách hàng', style: GoogleFonts.inter(color: DrivoColors.textMuted, fontSize: 11)),
+            Text(name ?? 'Khách DRIVO',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(color: DrivoColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+            if (phone != null)
+              Text(phone!, style: GoogleFonts.inter(color: DrivoColors.textSecondary, fontSize: 12.5)),
+          ]),
+        ),
+        if (phone != null) ...[
+          roundButton(Icons.sms_outlined, DrivoColors.primary, 'Nhắn tin', () => _open(context, 'sms')),
+          const SizedBox(width: 8),
+          roundButton(Icons.call_rounded, DrivoColors.success, 'Gọi khách', () => _open(context, 'tel')),
+        ],
+      ]),
+    );
+  }
 }
 
 /// Thanh đếm ngược lượt ưu tiên riêng cho tài xế; hết giờ gọi onExpired.

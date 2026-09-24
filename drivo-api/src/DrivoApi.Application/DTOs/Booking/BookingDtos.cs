@@ -152,6 +152,11 @@ public class BookingDetailResponse
     /// <summary>Cuốc chờ đang được ưu tiên riêng cho tài xế này: số giây còn lại để nhận (null = đang mở cho mọi tài xế).</summary>
     public int? OfferSecondsLeft { get; set; }
 
+    /// <summary>Tên khách (tài xế thấy cả khi chưa nhận cuốc).</summary>
+    public string? CustomerName { get; set; }
+    /// <summary>SĐT khách: chỉ trả cho tài xế đã nhận cuốc.</summary>
+    public string? CustomerPhone { get; set; }
+
     public BookingVehicleSummaryDto Vehicle { get; set; } = null!;
     public BookingDriverSummaryDto? Driver { get; set; }
 }

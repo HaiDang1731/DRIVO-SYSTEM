@@ -786,6 +786,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
 
         var candidates = await db.Bookings
             .Include(b => b.CustomerVehicle)
+            .Include(b => b.Customer).ThenInclude(c => c.User)
             .Include(b => b.Driver)
                 .ThenInclude(d => d!.User)
             .Where(b => b.Status == BookingStatus.SearchingDriver && b.DriverId == null)
@@ -815,6 +816,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
 
             var dto = MapToDetailResponse(booking);
             dto.DistanceToPickupKm = Math.Round((decimal)km, 2);
+            dto.CustomerName = booking.Customer?.User?.FullName; // chưa nhận cuốc: chỉ tên, không SĐT
             if (active != null)
                 dto.OfferSecondsLeft = Math.Max(1, (int)Math.Ceiling((active.SentAt + OfferTimeout - now).TotalSeconds));
             result.Add(dto);
@@ -1274,6 +1276,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
 
         var booking = await db.Bookings
             .Include(b => b.CustomerVehicle)
+            .Include(b => b.Customer).ThenInclude(c => c.User)
             .Include(b => b.Driver)
                 .ThenInclude(d => d!.User)
             .Where(b => b.DriverId == driver.Id &&
@@ -1282,7 +1285,14 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .OrderByDescending(b => b.CreatedAt)
             .FirstOrDefaultAsync();
 
-        return BaseResponse<BookingDetailResponse?>.Ok(booking != null ? MapToDetailResponse(booking) : null);
+        if (booking == null)
+            return BaseResponse<BookingDetailResponse?>.Ok(null);
+
+        // Tài xế đã nhận cuốc -> được thấy SĐT để gọi xác nhận / báo đã tới nơi
+        var dto = MapToDetailResponse(booking);
+        dto.CustomerName = booking.Customer?.User?.FullName;
+        dto.CustomerPhone = booking.Customer?.User?.Phone;
+        return BaseResponse<BookingDetailResponse?>.Ok(dto);
     }
 
     public async Task<BaseResponse<DriverEarningsResponse>> GetDriverEarningsAsync(int userId, string period, DateTime? date)
