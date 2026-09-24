@@ -125,6 +125,7 @@ class _DriverProfileViewState extends State<DriverProfileView> {
           final res = await ApiService.updateDriverProfile(body);
           if (!ctx.mounted) return;
           if (res['success'] == true) {
+            FocusManager.instance.primaryFocus?.unfocus();
             Navigator.pop(ctx);
             _snack(res['message']?.toString() ?? 'Đã lưu');
             widget.onChanged();
@@ -230,6 +231,8 @@ class _DriverProfileViewState extends State<DriverProfileView> {
         );
       }),
     );
+    // Chờ hiệu ứng đóng hộp xong mới hủy controller (hộp vẫn vẽ các ô nhập trong lúc trượt xuống)
+    await Future.delayed(const Duration(milliseconds: 400));
     for (final c in ctrls.values) {
       c.dispose();
     }

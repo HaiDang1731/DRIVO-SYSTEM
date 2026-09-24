@@ -630,19 +630,30 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     );
   }
 
-  /// Đóng hộp đánh giá và màn đặt xe, quay về Home.
+  /// Đóng hộp đánh giá; màn đặt xe được đóng sau khi hộp đóng xong (xem _showRatingDialog).
   void _closeAfterTrip(BuildContext sheetContext) {
+    FocusManager.instance.primaryFocus?.unfocus();
     Navigator.pop(sheetContext);
-    setState(() => _activeBooking = null);
-    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
-  void _showRatingDialog(BookingDetail completedBooking) {
+  Future<void> _showRatingDialog(BookingDetail completedBooking) async {
     int rating = 5;
     final commentController = TextEditingController();
     bool isSubmitting = false;
 
-    showModalBottomSheet(
+    // Đóng hộp đánh giá và màn đặt xe cùng 1 lúc (nhất là khi bàn phím đang mở) làm Flutter
+    // báo lỗi '_dependents.isEmpty' -> chờ hộp đóng hẳn rồi mới quay về Home.
+    await _showRatingSheet(completedBooking, rating, commentController, isSubmitting);
+    await Future.delayed(const Duration(milliseconds: 350));
+    commentController.dispose();
+    if (!mounted) return;
+    setState(() => _activeBooking = null);
+    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+  }
+
+  Future<void> _showRatingSheet(
+      BookingDetail completedBooking, int rating, TextEditingController commentController, bool isSubmitting) {
+    return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
