@@ -498,6 +498,13 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     }
   }
 
+  /// Đóng hộp đánh giá và màn đặt xe, quay về Home.
+  void _closeAfterTrip(BuildContext sheetContext) {
+    Navigator.pop(sheetContext);
+    setState(() => _activeBooking = null);
+    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+  }
+
   void _showRatingDialog(BookingDetail completedBooking) {
     int rating = 5;
     final commentController = TextEditingController();
@@ -579,8 +586,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                             completedBooking.id, rating, commentController.text);
                       } catch (_) {}
                       if (mounted && ctx.mounted) {
-                        Navigator.pop(ctx);
-                        setState(() { _activeBooking = null; });
+                        _closeAfterTrip(ctx);
                         messenger.showSnackBar(const SnackBar(
                           content: Text('Cảm ơn bạn đã đánh giá!'),
                           backgroundColor: Color(0xFF22C55E),
@@ -601,10 +607,7 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                 ),
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    setState(() { _activeBooking = null; });
-                  },
+                  onPressed: () => _closeAfterTrip(ctx),
                   child: const Text('Bỏ qua', style: TextStyle(color: Colors.white38)),
                 ),
               ],
@@ -1728,33 +1731,33 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
 
               // Trạng thái chuyến
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF0070E0),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        b.statusDisplay,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF0070E0),
-                        ),
-                      ),
-                    ],
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF0070E0),
+                      shape: BoxShape.circle,
+                    ),
                   ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      b.statusDisplay,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF0070E0),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Text(
-                    'Mã: #${b.bookingCode}',
+                    '#${b.bookingCode}',
                     style: GoogleFonts.inter(
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                       color: const Color(0xFF64748B),
                     ),

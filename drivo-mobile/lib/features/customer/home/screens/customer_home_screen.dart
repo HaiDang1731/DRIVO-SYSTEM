@@ -66,8 +66,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   Future<void> _checkActiveBooking() async {
     try {
       final res = await ApiService.getActiveBooking();
-      if (res['success'] == true && res['data'] != null) {
-        if (mounted) setState(() => _activeBooking = BookingDetail.fromJson(res['data']));
+      if (res['success'] == true && mounted) {
+        // data null = không còn chuyến đang chạy (vừa hoàn thành/hủy) -> bỏ thẻ chuyến cũ ở Home
+        setState(() => _activeBooking = res['data'] != null ? BookingDetail.fromJson(res['data']) : null);
       }
     } catch (_) {}
   }
