@@ -287,8 +287,35 @@ public class AuthService(DrivoDbContext db, IOptions<JwtSettings> jwtOptions) : 
         if (user == null)
             return BaseResponse<UserInfo>.Fail("Không tìm thấy người dùng.");
 
-        user.FullName = req.FullName;
-        user.Email = req.Email;
+        var name = req.FullName?.Trim() ?? string.Empty;
+        if (name.Length < 2 || name.Length > 100)
+            return BaseResponse<UserInfo>.Fail("Họ tên phải từ 2 đến 100 ký tự.");
+
+        var email = string.IsNullOrWhiteSpace(req.Email) ? null : req.Email.Trim().ToLowerInvariant();
+        if (email != null)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$"))
+                return BaseResponse<UserInfo>.Fail("Email không hợp lệ.");
+            if (email != user.Email && await db.Users.AnyAsync(u => u.Email == email && u.Id != userId && !u.IsDeleted))
+                return BaseResponse<UserInfo>.Fail("Email đã được tài khoản khác sử dụng.");
+        }
+
+        // Đổi SĐT = đổi tên đăng nhập -> bắt buộc nhập đúng mật khẩu hiện tại
+        var phone = string.IsNullOrWhiteSpace(req.Phone) ? user.Phone : req.Phone.Trim().Replace(" ", "").Replace(".", "");
+        var phoneChanged = phone != user.Phone;
+        if (phoneChanged)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(phone, @"^0\d{9}$"))
+                return BaseResponse<UserInfo>.Fail("Số điện thoại phải gồm 10 chữ số, bắt đầu bằng 0.");
+            if (string.IsNullOrEmpty(req.CurrentPassword) || !VerifyPassword(req.CurrentPassword, user.PasswordHash))
+                return BaseResponse<UserInfo>.Fail("Mật khẩu hiện tại không đúng. Cần mật khẩu để đổi số điện thoại.");
+            if (await db.Users.AnyAsync(u => u.Phone == phone && u.Id != userId && !u.IsDeleted))
+                return BaseResponse<UserInfo>.Fail("Số điện thoại đã được tài khoản khác sử dụng.");
+            user.Phone = phone;
+        }
+
+        user.FullName = name;
+        user.Email = email;
         user.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync();
@@ -305,7 +332,9 @@ public class AuthService(DrivoDbContext db, IOptions<JwtSettings> jwtOptions) : 
             Roles = roles
         };
 
-        return BaseResponse<UserInfo>.Ok(userInfo, "Cập nhật hồ sơ thành công.");
+        return BaseResponse<UserInfo>.Ok(userInfo, phoneChanged
+            ? "Đã cập nhật. Lần sau hãy đăng nhập bằng số điện thoại mới."
+            : "Cập nhật hồ sơ thành công.");
     }
 
     // ── Change Password ────────────────────────────────────────
