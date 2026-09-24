@@ -181,6 +181,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    /// <summary>Tài xế xác nhận khách vẫn đi, tiếp tục chờ (sau thời gian chờ miễn phí) -> báo khách phí chờ bắt đầu tính</summary>
+    [HttpPost("bookings/{id:long}/keep-waiting")]
+    public async Task<IActionResult> KeepWaiting(long id)
+    {
+        var result = await bookingService.KeepWaitingAsync(id, CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Cập nhật trạng thái cuốc (DriverArriving → DriverArrived → InProgress → Completed)</summary>
     [HttpPost("bookings/{id:long}/update-status")]
     public async Task<IActionResult> UpdateBookingStatus(long id, [FromBody] UpdateBookingStatusRequest request)

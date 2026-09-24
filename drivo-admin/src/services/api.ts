@@ -143,6 +143,12 @@ export interface AdminBookingDetail {
   startedAt?: string | null;
   completedAt?: string | null;
   cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  cancellationReason?: string | null;
+  /** Lần hủy có tính lỗi tài xế (trừ tỉ lệ hoàn thành) */
+  driverAtFault?: boolean;
+  /** Tài xế xác nhận tiếp tục chờ khách (sau thời gian miễn phí) */
+  waitExtendedAt?: string | null;
   driverLatitude?: number | null;
   driverLongitude?: number | null;
   driverLastLocationAt?: string | null;

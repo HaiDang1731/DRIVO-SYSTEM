@@ -8,6 +8,7 @@ import '../../../../core/drivo_map.dart';
 import '../../../../core/geo_utils.dart';
 import '../../../../core/location_service.dart';
 import '../../../../core/tracking_service.dart';
+import '../../../../core/widgets/trip_cancel_wait.dart';
 import '../../profile/customer_account_screens.dart' show PaymentPreference;
 
 /// Màn hình Đặt chuyến DRIVO
@@ -474,14 +475,30 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
           _activeBooking = null;
           _endTracking();
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Chuyến đi đã bị hủy.'), backgroundColor: Color(0xFFE53935)
-        ));
+        _showTripNotice(
+          icon: Icons.cancel_rounded,
+          color: const Color(0xFFEF4444),
+          title: updated.cancelledBy == 'DRIVER' ? 'Tài xế đã hủy chuyến' : 'Chuyến đi đã bị hủy',
+          message: updated.cancellationReason != null
+              ? 'Lý do: ${updated.cancellationReason}'
+              : 'Chuyến đi của bạn đã bị hủy.',
+        );
       } else if (updated.status == 'Completed') {
         _endTracking();
         _showRatingDialog(updated);
       } else {
         final statusChanged = updated.status != _activeBooking!.status;
+        // Tài xế vừa xác nhận tiếp tục chờ (đã hết thời gian chờ miễn phí) -> báo khách phí chờ đang tính
+        if (updated.waitExtendedAt != null && _activeBooking!.waitExtendedAt == null) {
+          _showTripNotice(
+            icon: Icons.timer_rounded,
+            color: const Color(0xFFF59E0B),
+            title: 'Tài xế tiếp tục chờ bạn',
+            message: updated.waitingPricePerMin > 0
+                ? 'Đã hết ${updated.freeWaitingMin} phút chờ miễn phí. Phí chờ ${_formatCurrency(updated.waitingPricePerMin)}/phút đang được tính, bạn ra điểm đón sớm nhé.'
+                : 'Tài xế đang chờ bạn tại điểm đón, bạn ra sớm nhé.',
+          );
+        }
         setState(() {
           _activeBooking = updated;
           _applyBookingDriverLocation(updated);
@@ -767,14 +784,56 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
     );
   }
 
+  /// Thông báo nổi bật trên màn khách (tài xế hủy / tài xế tiếp tục chờ).
+  void _showTripNotice({required IconData icon, required Color color, required String title, required String message}) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        icon: Icon(icon, color: color, size: 40),
+        title: Text(title, textAlign: TextAlign.center,
+            style: GoogleFonts.inter(fontSize: 17, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A))),
+        content: Text(message, textAlign: TextAlign.center,
+            style: GoogleFonts.inter(fontSize: 13.5, color: const Color(0xFF475569))),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0070E0),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Đã hiểu', style: GoogleFonts.inter(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _cancelBooking() async {
-    if (_activeBooking == null || _submitting) return;
+    final b = _activeBooking;
+    if (b == null || _submitting) return;
+    final hasDriver = b.driverName != null;
+    final choice = await showCancelReasonSheet(
+      context,
+      title: 'Bạn muốn hủy chuyến?',
+      subtitle: 'Cho DRIVO biết lý do để phục vụ bạn tốt hơn.',
+      reasons: [
+        const CancelReason('CHANGE_PLAN', 'Thay đổi kế hoạch'),
+        if (hasDriver) const CancelReason('WAIT_TOO_LONG', 'Chờ tài xế quá lâu'),
+        const CancelReason('WRONG_ADDRESS', 'Đặt nhầm địa chỉ'),
+        if (hasDriver) const CancelReason('DRIVER_ASKED', 'Tài xế yêu cầu tôi hủy'),
+        const CancelReason('OTHER', 'Lý do khác'),
+      ],
+    );
+    if (choice == null || !mounted || _activeBooking?.id != b.id) return;
     setState(() => _submitting = true);
     try {
-      final res = await ApiService.cancelBooking(
-        _activeBooking!.id,
-        'Khách hàng thay đổi kế hoạch',
-      );
+      final res = await ApiService.cancelBooking(b.id, choice.code, choice.note);
       if (res['success'] == true) {
         if (mounted) {
           setState(() {
@@ -787,7 +846,12 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
           );
         }
       } else {
-        if (mounted) setState(() => _submitting = false);
+        if (mounted) {
+          setState(() => _submitting = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(res['message'] ?? 'Không hủy được chuyến'), backgroundColor: const Color(0xFFE53935)),
+          );
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _submitting = false);
@@ -1980,6 +2044,19 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
                         ),
                       ],
                     ),
+                  ),
+                ],
+                if (b.status == 'DriverArrived' && b.arrivedAt != null) ...[
+                  const SizedBox(height: 10),
+                  WaitingTimerCard(
+                    arrivedAt: b.arrivedAt!,
+                    freeWaitingMin: b.freeWaitingMin,
+                    waitingPricePerMin: b.waitingPricePerMin,
+                    note: (over) => !over
+                        ? 'Tài xế đã đến điểm đón. Sau ${b.freeWaitingMin} phút chờ miễn phí sẽ tính phí chờ${b.waitingPricePerMin > 0 ? ' ${_formatCurrency(b.waitingPricePerMin)}/phút' : ''}.'
+                        : b.waitExtendedAt != null
+                            ? 'Tài xế tiếp tục chờ bạn, phí chờ đang được tính. Bạn ra điểm đón sớm nhé.'
+                            : 'Tài xế sẽ gọi xác nhận. Nếu bạn không có mặt, tài xế có thể hủy chuyến.',
                   ),
                 ],
               ] else ...[

@@ -218,6 +218,13 @@ class BookingDetail {
   final DateTime? arrivedAt;
   final DateTime? startedAt;
   final DateTime? completedAt;
+  // Hủy chuyến + chờ tại điểm đón
+  final String? cancelledBy;
+  final String? cancellationReason;
+  final DateTime? waitExtendedAt;
+  /// Phút chờ miễn phí và giá chờ/phút theo bảng giá admin cài đặt.
+  final int freeWaitingMin;
+  final double waitingPricePerMin;
   // Vị trí tài xế (khi đã có tài xế)
   final double? driverLatitude;
   final double? driverLongitude;
@@ -255,6 +262,11 @@ class BookingDetail {
     this.arrivedAt,
     this.startedAt,
     this.completedAt,
+    this.cancelledBy,
+    this.cancellationReason,
+    this.waitExtendedAt,
+    this.freeWaitingMin = 0,
+    this.waitingPricePerMin = 0,
     this.driverLatitude,
     this.driverLongitude,
     this.driverLastLocationAt,
@@ -299,6 +311,11 @@ class BookingDetail {
       arrivedAt: _toDt(j['arrivedAt']),
       startedAt: _toDt(j['startedAt']),
       completedAt: _toDt(j['completedAt']),
+      cancelledBy: j['cancelledBy'],
+      cancellationReason: j['cancellationReason'],
+      waitExtendedAt: _toDt(j['waitExtendedAt']),
+      freeWaitingMin: _toI(j['freeWaitingMin']) ?? 0,
+      waitingPricePerMin: _toD(j['waitingPricePerMin']) ?? 0,
       driverLatitude: _toD(j['driverLatitude']),
       driverLongitude: _toD(j['driverLongitude']),
       driverLastLocationAt: _toDt(j['driverLastLocationAt']),
@@ -626,6 +643,13 @@ class DriverBooking {
   final String? voucherCode;
   final String? customerName;
   final String? customerPhone;
+  // Chờ tại điểm đón (quy tắc phí chờ theo bảng giá admin)
+  final DateTime? arrivedAt;
+  final DateTime? waitExtendedAt;
+  final int freeWaitingMin;
+  final double waitingPricePerMin;
+  final String? cancelledBy;
+  final String? cancellationReason;
 
   DriverBooking({
     required this.id,
@@ -662,6 +686,12 @@ class DriverBooking {
     this.voucherCode,
     this.customerName,
     this.customerPhone,
+    this.arrivedAt,
+    this.waitExtendedAt,
+    this.freeWaitingMin = 0,
+    this.waitingPricePerMin = 0,
+    this.cancelledBy,
+    this.cancellationReason,
   });
 
   bool get hasPickupCoords =>
@@ -694,6 +724,12 @@ class DriverBooking {
       voucherCode: j['voucherCode'],
       customerName: c is Map ? c['fullName'] : j['customerName'],
       customerPhone: c is Map ? c['phone'] : j['customerPhone'],
+      arrivedAt: _toDt(j['arrivedAt']),
+      waitExtendedAt: _toDt(j['waitExtendedAt']),
+      freeWaitingMin: _toI(j['freeWaitingMin']) ?? 0,
+      waitingPricePerMin: _toD(j['waitingPricePerMin']) ?? 0,
+      cancelledBy: j['cancelledBy'],
+      cancellationReason: j['cancellationReason'],
       id: j['id'],
       bookingCode: j['bookingCode'] ?? '',
       status: j['status'] ?? '',
@@ -978,7 +1014,8 @@ class ApiService {
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');
   static Future<Map<String, dynamic>> getBookingById(int id) => get('/bookings/$id');
   static Future<Map<String, dynamic>> rateDriver(int bookingId, int score, String comment) => post('/bookings/$bookingId/rate', {'score': score, 'comment': comment});
-  static Future<Map<String, dynamic>> cancelBooking(int id, String reason) => post('/bookings/$id/cancel', {'reason': reason});
+  static Future<Map<String, dynamic>> cancelBooking(int id, String reasonCode, [String? note]) =>
+      post('/bookings/$id/cancel', {'reasonCode': reasonCode, 'reason': note});
   static Future<Map<String, dynamic>> getCustomerHistory() => get('/bookings/customer-history');
 
   // Driver
@@ -1041,8 +1078,9 @@ class ApiService {
       post('/driver/bookings/$id/reject', {});
   static Future<Map<String, dynamic>> updateBookingStatus(int id, String status) =>
       post('/driver/bookings/$id/update-status', {'status': status});
-  static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reason) =>
-      post('/driver/bookings/$id/cancel', {'reason': reason});
+  static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reasonCode, [String? note]) =>
+      post('/driver/bookings/$id/cancel', {'reasonCode': reasonCode, 'reason': note});
+  static Future<Map<String, dynamic>> keepWaiting(int id) => post('/driver/bookings/$id/keep-waiting', {});
   static Future<Map<String, dynamic>> getDriverActiveBooking() =>
       get('/driver/bookings/active');
   /// period: day | week | month; date: ngày bất kỳ trong kỳ (giờ VN)

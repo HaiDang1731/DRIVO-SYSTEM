@@ -107,6 +107,7 @@ export function BookingDetailPage() {
     { label: 'Tạo chuyến', at: data.createdAt, icon: '📝' },
     { label: 'Tài xế nhận chuyến', at: data.acceptedAt, icon: '✅' },
     { label: 'Tài xế đến điểm đón (xe điện)', at: data.arrivedAt, icon: '🛴' },
+    ...(data.waitExtendedAt ? [{ label: 'Tài xế xác nhận tiếp tục chờ (bắt đầu tính phí chờ)', at: data.waitExtendedAt, icon: '⏱️' }] : []),
     { label: 'Bắt đầu chuyến (lái xe khách)', at: data.startedAt, icon: '🚗' },
     { label: 'Hoàn thành', at: data.completedAt, icon: '🏁' },
   ];
@@ -186,6 +187,18 @@ export function BookingDetailPage() {
               <div><span>🟢 Điểm đón</span><b>{data.pickupAddress}</b></div>
               <div><span>🔴 Điểm đến</span><b>{data.destinationAddress}</b></div>
               {data.customerNote && <div><span>Ghi chú</span><b>{data.customerNote}</b></div>}
+              {data.status === 'Cancelled' && (
+                <div>
+                  <span>Hủy bởi</span>
+                  <b>
+                    {{ CUSTOMER: 'Khách hàng', DRIVER: 'Tài xế', ADMIN: 'Admin', SYSTEM: 'Hệ thống' }[data.cancelledBy ?? ''] || data.cancelledBy || '—'}
+                    {data.cancellationReason ? ` · ` : ''}
+                    {data.driver && (
+                      <> <Badge type={data.driverAtFault ? 'danger' : 'success'}>{data.driverAtFault ? 'Tính lỗi tài xế' : 'Không tính lỗi tài xế'}</Badge></>
+                    )}
+                  </b>
+                </div>
+              )}
             </div>
           </div>
 

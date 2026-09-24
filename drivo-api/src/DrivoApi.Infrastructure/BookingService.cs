@@ -410,7 +410,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (booking == null)
             return BaseResponse<BookingDetailResponse?>.Ok(null);
 
-        return BaseResponse<BookingDetailResponse?>.Ok(MapToDetailResponse(booking));
+        return BaseResponse<BookingDetailResponse?>.Ok(await WithWaitingRuleAsync(MapToDetailResponse(booking), booking));
     }
 
     public async Task<BaseResponse<BookingDetailResponse>> GetBookingByIdAsync(long bookingId, int userId)
@@ -431,8 +431,65 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (!isCustomer && !isDriver)
             return BaseResponse<BookingDetailResponse>.Fail("Bạn không có quyền truy cập cuốc xe này.");
 
-        return BaseResponse<BookingDetailResponse>.Ok(MapToDetailResponse(booking));
+        return BaseResponse<BookingDetailResponse>.Ok(await WithWaitingRuleAsync(MapToDetailResponse(booking), booking));
     }
+
+    // ── Lý do hủy chuyến ──────────────────────────────────────
+    // Khách: CHANGE_PLAN | WAIT_TOO_LONG | WRONG_ADDRESS | DRIVER_ASKED (tính lỗi tài xế) | OTHER
+    private static readonly Dictionary<string, string> CustomerCancelReasons = new()
+    {
+        ["CHANGE_PLAN"] = "Thay đổi kế hoạch",
+        ["WAIT_TOO_LONG"] = "Chờ tài xế quá lâu",
+        ["WRONG_ADDRESS"] = "Đặt nhầm địa chỉ",
+        ["DRIVER_ASKED"] = "Tài xế yêu cầu tôi hủy",
+        ["OTHER"] = "Lý do khác",
+    };
+
+    // Tài xế: lỗi phía khách (không trừ tỉ lệ hoàn thành) và lý do cá nhân (có trừ)
+    private static readonly Dictionary<string, string> DriverCancelReasons = new()
+    {
+        ["CUSTOMER_NO_SHOW"] = "Khách không có mặt",
+        ["CAR_UNAVAILABLE"] = "Không nhận được xe của khách",
+        ["CUSTOMER_REFUSED"] = "Khách báo không đi nữa",
+        ["PERSONAL"] = "Tài xế có việc cá nhân",
+        ["SCOOTER_ISSUE"] = "Xe điện gấp gặp sự cố",
+        ["OTHER"] = "Lý do khác",
+    };
+
+    /// <summary>Ghép lý do hiển thị: nhãn của mã + ghi chú thêm (nếu có). Null = mã không hợp lệ.</summary>
+    private static string? BuildReason(Dictionary<string, string> reasons, string? code, string? note)
+    {
+        note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        if (note?.Length > 300) note = note[..300];
+        if (string.IsNullOrWhiteSpace(code)) return note;
+        if (!reasons.TryGetValue(code, out var label)) return null;
+        if (code == "OTHER") return note;
+        return note == null ? label : $"{label}: {note}";
+    }
+
+    /// <summary>Số phút tài xế đã chờ tại điểm đón.</summary>
+    private static double WaitedMinutes(Booking b, DateTime now) =>
+        b.ArrivedAt.HasValue ? (now - b.ArrivedAt.Value).TotalMinutes : 0;
+
+    /// <summary>Gắn quy tắc phí chờ vào DTO để app hiển thị đồng hồ chờ tại điểm đón.</summary>
+    private async Task<BookingDetailResponse> WithWaitingRuleAsync(BookingDetailResponse dto, Booking booking)
+    {
+        var rule = await GetPricingRuleForBookingAsync(booking);
+        dto.FreeWaitingMin = rule.FreeWaitingMin;
+        dto.WaitingPricePerMin = rule.WaitingPricePerMin;
+        return dto;
+    }
+
+    private void AddNotification(int userId, string title, string message, long bookingId) =>
+        db.Notifications.Add(new Notification
+        {
+            UserId = userId,
+            Type = "BOOKING",
+            Title = title,
+            Message = message,
+            DataJson = $"{{\"bookingId\":{bookingId}}}",
+            CreatedAt = DateTime.UtcNow
+        });
 
     public async Task<BaseResponse<bool>> CancelBookingAsync(long bookingId, int userId, CancelBookingRequest req)
     {
@@ -447,21 +504,36 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (booking.Status == BookingStatus.Completed || booking.Status == BookingStatus.Cancelled)
             return BaseResponse<bool>.Fail("Cuốc xe đã kết thúc hoặc đã hủy trước đó.");
 
+        if (req.ReasonCode == "OTHER" && string.IsNullOrWhiteSpace(req.Reason))
+            return BaseResponse<bool>.Fail("Vui lòng ghi rõ lý do hủy.");
+        var reason = BuildReason(CustomerCancelReasons, req.ReasonCode, req.Reason);
+        if (!string.IsNullOrWhiteSpace(req.ReasonCode) && reason == null)
+            return BaseResponse<bool>.Fail("Lý do hủy không hợp lệ.");
+        reason ??= "Khách hàng hủy";
+
+        var now = DateTime.UtcNow;
         var oldStatus = booking.Status;
         booking.Status = BookingStatus.Cancelled;
         booking.CancelledBy = "CUSTOMER";
-        booking.CancellationReason = req.Reason ?? "Khách hàng hủy";
-        booking.CancelledAt = DateTime.UtcNow;
-        booking.UpdatedAt = DateTime.UtcNow;
+        booking.CancellationReason = reason;
+        // Khách tự hủy không tính cho tài xế, trừ khi khách báo tài xế nhờ hủy hộ (né bị trừ tỉ lệ).
+        booking.DriverAtFault = booking.DriverId.HasValue && req.ReasonCode == "DRIVER_ASKED";
+        booking.CancelledAt = now;
+        booking.UpdatedAt = now;
 
         if (booking.DriverId.HasValue)
         {
             var driver = await db.Drivers.FirstOrDefaultAsync(d => d.Id == booking.DriverId.Value);
-            if (driver != null && driver.DriverStatus == DriverStatus.Busy)
+            if (driver != null)
             {
-                LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, "Khách hủy chuyến", DateTime.UtcNow);
-                driver.DriverStatus = DriverStatus.Online;
-                driver.UpdatedAt = DateTime.UtcNow;
+                if (driver.DriverStatus == DriverStatus.Busy)
+                {
+                    LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, "Khách hủy chuyến", now);
+                    driver.DriverStatus = DriverStatus.Online;
+                    driver.UpdatedAt = now;
+                }
+                AddNotification(driver.UserId, "Khách đã hủy chuyến",
+                    $"Cuốc {booking.BookingCode} đã bị khách hủy. Lý do: {reason}.", booking.Id);
             }
         }
 
@@ -471,8 +543,8 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             OldStatus = DrivoDbContext.ToSnakeUpper(oldStatus.ToString()),
             NewStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.Cancelled.ToString()),
             ChangedByUserId = userId,
-            Reason = req.Reason ?? "Khách hàng hủy",
-            ChangedAt = DateTime.UtcNow
+            Reason = reason,
+            ChangedAt = now
         });
 
         await db.SaveChangesAsync();
@@ -487,23 +559,53 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (driver == null)
             return BaseResponse<bool>.Fail("Không tìm thấy thông tin tài xế.");
 
-        var booking = await db.Bookings.FirstOrDefaultAsync(b => b.Id == bookingId && b.DriverId == driver.Id);
+        var booking = await db.Bookings.Include(b => b.Customer).FirstOrDefaultAsync(b => b.Id == bookingId && b.DriverId == driver.Id);
         if (booking == null)
             return BaseResponse<bool>.Fail("Không tìm thấy cuốc xe.");
 
         if (booking.Status == BookingStatus.Completed || booking.Status == BookingStatus.Cancelled)
             return BaseResponse<bool>.Fail("Cuốc xe đã kết thúc hoặc đã hủy trước đó.");
+        if (booking.Status == BookingStatus.InProgress)
+            return BaseResponse<bool>.Fail("Chuyến đang chạy, không thể hủy. Liên hệ tổng đài nếu có sự cố.");
+
+        if (req.ReasonCode == "OTHER" && string.IsNullOrWhiteSpace(req.Reason))
+            return BaseResponse<bool>.Fail("Vui lòng ghi rõ lý do hủy.");
+        var reason = BuildReason(DriverCancelReasons, req.ReasonCode, req.Reason);
+        if (!string.IsNullOrWhiteSpace(req.ReasonCode) && reason == null)
+            return BaseResponse<bool>.Fail("Lý do hủy không hợp lệ.");
+        reason ??= "Tài xế hủy";
+
+        var now = DateTime.UtcNow;
+        var customerFault = false;
+        if (req.ReasonCode is "CUSTOMER_NO_SHOW" or "CAR_UNAVAILABLE" or "CUSTOMER_REFUSED")
+        {
+            if (booking.Status != BookingStatus.DriverArrived)
+                return BaseResponse<bool>.Fail("Chỉ chọn được lý do này khi bạn đã đến điểm đón.");
+            // Khách vắng mặt / không giao xe: phải chờ hết thời gian miễn phí. Khách báo không đi: hủy được ngay.
+            if (req.ReasonCode != "CUSTOMER_REFUSED")
+            {
+                var rule = await GetPricingRuleForBookingAsync(booking);
+                var left = rule.FreeWaitingMin - WaitedMinutes(booking, now);
+                if (left > 0)
+                    return BaseResponse<bool>.Fail($"Hãy chờ khách đủ {rule.FreeWaitingMin} phút (còn {Math.Ceiling(left)} phút) rồi mới hủy vì lý do này.");
+            }
+            customerFault = true;
+        }
 
         var oldStatus = booking.Status;
         booking.Status = BookingStatus.Cancelled;
         booking.CancelledBy = "DRIVER";
-        booking.CancellationReason = req.Reason ?? "Tài xế hủy";
-        booking.CancelledAt = DateTime.UtcNow;
-        booking.UpdatedAt = DateTime.UtcNow;
+        booking.CancellationReason = reason;
+        booking.DriverAtFault = !customerFault;
+        booking.CancelledAt = now;
+        booking.UpdatedAt = now;
 
-        LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, req.Reason ?? "Tài xế hủy chuyến", DateTime.UtcNow);
+        LogDriverStatusChange(driver.Id, driver.DriverStatus, DriverStatus.Online, reason, now);
         driver.DriverStatus = DriverStatus.Online;
-        driver.UpdatedAt = DateTime.UtcNow;
+        driver.UpdatedAt = now;
+
+        AddNotification(booking.Customer.UserId, "Tài xế đã hủy chuyến",
+            $"Cuốc {booking.BookingCode} đã bị hủy. Lý do: {reason}.", booking.Id);
 
         db.BookingStatusHistories.Add(new BookingStatusHistory
         {
@@ -511,14 +613,46 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             OldStatus = DrivoDbContext.ToSnakeUpper(oldStatus.ToString()),
             NewStatus = DrivoDbContext.ToSnakeUpper(BookingStatus.Cancelled.ToString()),
             ChangedByUserId = userId,
-            Reason = req.Reason ?? "Tài xế hủy",
-            ChangedAt = DateTime.UtcNow
+            Reason = reason,
+            ChangedAt = now
         });
 
         await db.SaveChangesAsync();
         await ReleaseVoucherAsync(booking);
         await NotifyStatusAsync(booking);
-        return BaseResponse<bool>.Ok(true, "Hủy chuyến thành công.");
+        return BaseResponse<bool>.Ok(true, customerFault
+            ? "Đã hủy chuyến. Lần hủy này không tính vào tỉ lệ hoàn thành của bạn."
+            : "Đã hủy chuyến.");
+    }
+
+    public async Task<BaseResponse<bool>> KeepWaitingAsync(long bookingId, int userId)
+    {
+        var driver = await db.Drivers.FirstOrDefaultAsync(d => d.UserId == userId);
+        if (driver == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy thông tin tài xế.");
+
+        var booking = await db.Bookings.Include(b => b.Customer).FirstOrDefaultAsync(b => b.Id == bookingId && b.DriverId == driver.Id);
+        if (booking == null)
+            return BaseResponse<bool>.Fail("Không tìm thấy cuốc xe.");
+        if (booking.Status != BookingStatus.DriverArrived)
+            return BaseResponse<bool>.Fail("Chỉ dùng được khi bạn đang chờ khách tại điểm đón.");
+        if (booking.WaitExtendedAt.HasValue)
+            return BaseResponse<bool>.Ok(true, "Đã báo khách trước đó.");
+
+        var rule = await GetPricingRuleForBookingAsync(booking);
+        var now = DateTime.UtcNow;
+        if (WaitedMinutes(booking, now) < rule.FreeWaitingMin)
+            return BaseResponse<bool>.Fail($"Vẫn đang trong {rule.FreeWaitingMin} phút chờ miễn phí.");
+
+        booking.WaitExtendedAt = now;
+        booking.UpdatedAt = now;
+        var fee = rule.WaitingPricePerMin > 0 ? $" Phí chờ {rule.WaitingPricePerMin:N0}đ/phút đang được tính." : "";
+        AddNotification(booking.Customer.UserId, "Tài xế tiếp tục chờ bạn",
+            $"Tài xế đang chờ bạn tại điểm đón (cuốc {booking.BookingCode}).{fee}", booking.Id);
+
+        await db.SaveChangesAsync();
+        await NotifyStatusAsync(booking);
+        return BaseResponse<bool>.Ok(true, "Đã báo khách: bạn tiếp tục chờ, phí chờ đang được tính.");
     }
 
     public async Task<BaseResponse<List<BookingDetailResponse>>> GetCustomerBookingsAsync(int userId, int page, int pageSize)
@@ -610,6 +744,10 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         dto.ArrivedAt = b.ArrivedAt;
         dto.StartedAt = b.StartedAt;
         dto.CompletedAt = b.CompletedAt;
+        dto.CancelledBy = b.CancelledBy;
+        dto.CancellationReason = b.CancellationReason;
+        dto.CancelledAt = b.CancelledAt;
+        dto.WaitExtendedAt = b.WaitExtendedAt;
         dto.Vehicle = new BookingVehicleSummaryDto
         {
             Id = b.CustomerVehicle.Id,
@@ -735,12 +873,12 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .ToList();
         if (nearby.Count == 0) return [];
 
-        // Tỉ lệ hoàn thành 30 ngày: hoàn thành / (hoàn thành + tài xế tự hủy). Khách hủy không tính cho tài xế.
+        // Tỉ lệ hoàn thành 30 ngày: hoàn thành / (hoàn thành + lần hủy do lỗi tài xế). Khách hủy, khách vắng mặt không tính cho tài xế.
         var ids = nearby.Select(d => d.Id).ToList();
         var from = DateTime.UtcNow.AddDays(-30);
         var stats = await db.Bookings.AsNoTracking()
             .Where(x => x.DriverId != null && ids.Contains(x.DriverId.Value) && x.CreatedAt >= from &&
-                        (x.Status == BookingStatus.Completed || (x.Status == BookingStatus.Cancelled && x.CancelledBy == "DRIVER")))
+                        (x.Status == BookingStatus.Completed || (x.Status == BookingStatus.Cancelled && x.DriverAtFault)))
             .GroupBy(x => x.DriverId!.Value)
             .Select(g => new { DriverId = g.Key, Completed = g.Count(x => x.Status == BookingStatus.Completed), Total = g.Count() })
             .ToDictionaryAsync(x => x.DriverId);
@@ -1105,7 +1243,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         if (parsedStatus == BookingStatus.Completed)
             await wallet.SettleTripAsync(booking.Id); // cấn trừ ví tài xế theo chuyến
         await NotifyStatusAsync(booking);
-        return BaseResponse<BookingDetailResponse>.Ok(MapToDetailResponse(booking));
+        return BaseResponse<BookingDetailResponse>.Ok(await WithWaitingRuleAsync(MapToDetailResponse(booking), booking));
     }
 
     /// <summary>Ghi lịch sử đổi DriverStatus (Online/Busy/Offline) để hiển thị ở trang chi tiết tài xế trên admin.</summary>
@@ -1339,7 +1477,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
         var dto = MapToDetailResponse(booking);
         dto.CustomerName = booking.Customer?.User?.FullName;
         dto.CustomerPhone = booking.Customer?.User?.Phone;
-        return BaseResponse<BookingDetailResponse?>.Ok(dto);
+        return BaseResponse<BookingDetailResponse?>.Ok(await WithWaitingRuleAsync(dto, booking));
     }
 
     public async Task<BaseResponse<DriverEarningsResponse>> GetDriverEarningsAsync(int userId, string period, DateTime? date)
@@ -1552,9 +1690,7 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             FullName = b.Customer.User.FullName,
             Phone = b.Customer.User.Phone
         };
-        dto.CancelledBy = b.CancelledBy;
-        dto.CancellationReason = b.CancellationReason;
-        dto.CancelledAt = b.CancelledAt;
+        dto.DriverAtFault = b.DriverAtFault;
 
         dto.Trail = await db.DriverLocationHistories.AsNoTracking()
             .Where(h => h.BookingId == bookingId)

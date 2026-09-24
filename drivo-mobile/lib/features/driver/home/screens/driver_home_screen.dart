@@ -9,6 +9,7 @@ import '../../../../../core/drivo_map.dart';
 import '../../../../../core/geo_utils.dart';
 import '../../../../../core/location_service.dart';
 import '../../../../../core/theme.dart';
+import '../../../../../core/widgets/trip_cancel_wait.dart';
 import '../../profile/driver_profile_view.dart';
 import '../../wallet/driver_wallet_screen.dart';
 
@@ -242,12 +243,21 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           } else {
              setState(() => _activeBooking = updated);
           }
-        } else {
-          // Booking might have been cancelled
+        } else if (res['success'] == true) {
+          // Cuốc không còn hoạt động: lấy lý do nếu khách/admin đã hủy
+          final gone = _activeBooking!;
           setState(() => _activeBooking = null);
           _syncLocationUpdates();
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Cuốc xe đã bị hủy hoặc không còn khả dụng.'), backgroundColor: DrivoColors.danger
+          final detail = await ApiService.getBookingById(gone.id);
+          if (!mounted) return;
+          final d = detail['data'];
+          final msg = d is Map && d['status'] == 'Cancelled'
+              ? '${d['cancelledBy'] == 'CUSTOMER' ? 'Khách đã hủy chuyến' : 'Cuốc đã bị hủy'}'
+                '${d['cancellationReason'] != null ? '. Lý do: ${d['cancellationReason']}' : ''}'
+                '${d['cancelledBy'] == 'CUSTOMER' && !'${d['cancellationReason']}'.startsWith('Tài xế yêu cầu') ? ' (không tính vào tỉ lệ hoàn thành của bạn)' : ''}'
+              : 'Cuốc xe đã bị hủy hoặc không còn khả dụng.';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(msg), backgroundColor: DrivoColors.danger, duration: const Duration(seconds: 6),
           ));
         }
       }
@@ -562,34 +572,51 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
     }
   }
 
-  Future<void> _cancelBooking() async {
-    if (_activeBooking == null || _updatingStatus) return;
-    
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: DrivoColors.bgCard,
-        title: const Text('Xác nhận hủy', style: TextStyle(color: DrivoColors.danger)),
-        content: const Text('Bạn có chắc chắn muốn hủy cuốc xe này không? Việc này có thể ảnh hưởng đến tỷ lệ nhận chuyến của bạn.', style: TextStyle(color: DrivoColors.textPrimary)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Không', style: TextStyle(color: DrivoColors.textMuted))),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), style: ElevatedButton.styleFrom(backgroundColor: DrivoColors.danger), child: const Text('Hủy cuốc')),
+  Future<void> _cancelBooking({bool customerSide = false}) async {
+    final b = _activeBooking;
+    if (b == null || _updatingStatus) return;
+
+    // Lý do phía khách chỉ chọn được khi đã tới điểm đón; khách vắng mặt / không giao xe phải chờ hết thời gian miễn phí.
+    final arrived = b.status == 'DriverArrived';
+    final waitedMin = arrived && b.arrivedAt != null ? DateTime.now().difference(b.arrivedAt!).inSeconds / 60 : 0.0;
+    final waitedEnough = arrived && waitedMin >= b.freeWaitingMin;
+    final leftMin = (b.freeWaitingMin - waitedMin).ceil();
+    final waitHint = !arrived
+        ? 'Chỉ chọn được khi đã đến điểm đón'
+        : waitedEnough
+            ? 'Không tính vào tỉ lệ hoàn thành'
+            : 'Chờ đủ ${b.freeWaitingMin} phút (còn ~$leftMin phút) mới chọn được';
+
+    final choice = await showCancelReasonSheet(
+      context,
+      dark: true,
+      title: 'Lý do hủy cuốc',
+      subtitle: 'Lý do "tài xế" sẽ tính vào tỉ lệ hoàn thành của bạn.',
+      reasons: [
+        CancelReason('CUSTOMER_NO_SHOW', 'Khách không có mặt', hint: waitHint, enabled: waitedEnough, noFault: true),
+        CancelReason('CAR_UNAVAILABLE', 'Không nhận được xe của khách', hint: waitHint, enabled: waitedEnough, noFault: true),
+        CancelReason('CUSTOMER_REFUSED', 'Khách báo không đi nữa',
+            hint: arrived ? 'Không tính vào tỉ lệ hoàn thành' : 'Chỉ chọn được khi đã đến điểm đón',
+            enabled: arrived, noFault: true),
+        if (!customerSide) ...const [
+          CancelReason('PERSONAL', 'Tôi có việc cá nhân', hint: 'Tính vào tỉ lệ hoàn thành'),
+          CancelReason('SCOOTER_ISSUE', 'Xe điện gấp gặp sự cố', hint: 'Tính vào tỉ lệ hoàn thành'),
+          CancelReason('OTHER', 'Lý do khác', hint: 'Tính vào tỉ lệ hoàn thành'),
         ],
-      )
+      ],
     );
-    
-    if (confirm != true) return;
-    
+    if (choice == null || !mounted) return;
+
     setState(() => _updatingStatus = true);
-    final res = await ApiService.cancelBookingByDriver(_activeBooking!.id, "Tài xế có việc bận đột xuất");
+    final res = await ApiService.cancelBookingByDriver(b.id, choice.code, choice.note);
     if (mounted) {
       setState(() => _updatingStatus = false);
       if (res['success'] == true) {
         setState(() => _activeBooking = null);
         _startPolling();
         _syncLocationUpdates();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Đã hủy chuyến thành công'), backgroundColor: DrivoColors.success
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res['message'] ?? 'Đã hủy chuyến'), backgroundColor: DrivoColors.success
         ));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -597,6 +624,68 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
         ));
       }
     }
+  }
+
+  /// Hết thời gian chờ miễn phí, khách xác nhận vẫn đi -> báo khách phí chờ bắt đầu tính.
+  Future<void> _keepWaiting() async {
+    final b = _activeBooking;
+    if (b == null || _updatingStatus) return;
+    setState(() => _updatingStatus = true);
+    final res = await ApiService.keepWaiting(b.id);
+    if (!mounted) return;
+    setState(() => _updatingStatus = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(res['message'] ?? (res['success'] == true ? 'Đã báo khách' : 'Lỗi')),
+      backgroundColor: res['success'] == true ? DrivoColors.success : DrivoColors.danger,
+    ));
+    if (res['success'] == true) _loadActiveBooking();
+  }
+
+  /// Đồng hồ chờ khách tại điểm đón + nút xác nhận sau khi hết thời gian miễn phí.
+  Widget _buildWaitingCard(DriverBooking b) {
+    return WaitingTimerCard(
+      arrivedAt: b.arrivedAt!,
+      freeWaitingMin: b.freeWaitingMin,
+      waitingPricePerMin: b.waitingPricePerMin,
+      dark: true,
+      note: (over) => !over
+          ? 'Khách chưa ra? Hãy gọi cho khách. Hết ${b.freeWaitingMin} phút mà khách không có mặt, bạn được hủy mà không bị trừ tỉ lệ hoàn thành.'
+          : b.waitExtendedAt != null
+              ? 'Đã báo khách bạn tiếp tục chờ, phí chờ đang được tính.'
+              : 'Hết thời gian chờ miễn phí. Gọi xác nhận với khách còn đi không?',
+      actions: (ctx, over) => !over || b.waitExtendedAt != null
+          ? const SizedBox.shrink()
+          : Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Row(children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _updatingStatus ? null : _keepWaiting,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: DrivoColors.warning,
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: Text('Khách vẫn đi, chờ tiếp',
+                        style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12.5)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _updatingStatus ? null : () => _cancelBooking(customerSide: true),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: DrivoColors.danger),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: Text('Khách không đi / vắng',
+                        style: GoogleFonts.inter(color: DrivoColors.danger, fontWeight: FontWeight.w700, fontSize: 12.5)),
+                  ),
+                ),
+              ]),
+            ),
+    );
   }
 
   void _showChangePasswordDialog({bool forced = false}) {
@@ -978,6 +1067,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
           ),
           const SizedBox(height: 16),
 
+          if (b.status == 'DriverArrived' && b.arrivedAt != null) ...[
+            _buildWaitingCard(b),
+            const SizedBox(height: 16),
+          ],
+
           // Liên hệ khách: gọi xác nhận chuyến / báo đã tới điểm đón
           if (b.customerName != null || b.customerPhone != null) ...[
             _CustomerContactCard(name: b.customerName, phone: b.customerPhone),
@@ -1040,7 +1134,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with TickerProvider
               ),
             ),
           
-          if (b.status == 'DriverAccepted' || b.status == 'DriverArriving') ...[
+          if (b.status == 'DriverAccepted' || b.status == 'DriverArriving' || b.status == 'DriverArrived') ...[
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
