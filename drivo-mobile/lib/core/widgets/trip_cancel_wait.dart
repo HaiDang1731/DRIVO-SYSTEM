@@ -28,7 +28,7 @@ Future<CancelChoice?> showCancelReasonSheet(
   String? subtitle,
   required List<CancelReason> reasons,
   bool dark = false,
-}) {
+}) async {
   final bg = dark ? const Color(0xFF16162A) : Colors.white;
   final fg = dark ? const Color(0xFFF0F0FF) : const Color(0xFF0F172A);
   final muted = dark ? const Color(0xFF8888AA) : const Color(0xFF64748B);
@@ -38,7 +38,7 @@ Future<CancelChoice?> showCancelReasonSheet(
   String? selected;
   String? error;
 
-  return showModalBottomSheet<CancelChoice>(
+  final result = await showModalBottomSheet<CancelChoice>(
     context: context,
     isScrollControlled: true,
     backgroundColor: bg,
@@ -132,7 +132,10 @@ Future<CancelChoice?> showCancelReasonSheet(
             Row(children: [
               Expanded(
                 child: TextButton(
-                  onPressed: () => Navigator.pop(ctx),
+                  onPressed: () {
+                    FocusScope.of(ctx).unfocus();
+                    Navigator.pop(ctx);
+                  },
                   child: Text('Không hủy', style: GoogleFonts.inter(color: muted, fontWeight: FontWeight.w600)),
                 ),
               ),
@@ -154,7 +157,12 @@ Future<CancelChoice?> showCancelReasonSheet(
         ),
       );
     }),
-  ).whenComplete(noteCtrl.dispose);
+  );
+  // Chờ sheet chạy xong hiệu ứng đóng (và bàn phím hạ xuống) rồi mới dispose / cho màn gọi đổi giao diện,
+  // tránh lỗi "_dependents.isEmpty" khi TextField còn trên cây widget.
+  await Future.delayed(const Duration(milliseconds: 400));
+  noteCtrl.dispose();
+  return result;
 }
 
 /// Phí chờ ước tính (giống server): (số phút chờ tròn xuống − phút miễn phí) × giá/phút, làm tròn 1.000đ.
