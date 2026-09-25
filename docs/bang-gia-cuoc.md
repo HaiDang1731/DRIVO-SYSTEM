@@ -6,7 +6,7 @@ Tài liệu này giải thích cách hệ thống tính số tiền khách trả
 
 DRIVO là dịch vụ **thuê tài xế lái hộ chính xe của khách**, dùng khi khách uống rượu bia, bận việc hoặc không tự lái được. Một chuyến gồm 2 chặng:
 
-1. **Chặng đón:** tài xế đi **xe điện gấp** của công ty từ vị trí hiện tại tới chỗ khách. Tới nơi, tài xế gấp xe bỏ vào cốp xe của khách.
+1. **Chặng đón:** tài xế đi **xe điện gấp** của công ty cấp từ vị trí hiện tại tới chỗ khách. Tới nơi, tài xế gấp xe bỏ vào cốp xe của khách.
 2. **Chặng chính:** tài xế lái xe của khách từ điểm đón tới điểm đến.
 
 Giá cước cần trả công cho cả 2 chặng và cả thời gian tài xế phải chờ khách.
@@ -68,8 +68,19 @@ Phí đón = max(0, km đón − Km đón miễn phí) × Phí đón/km
 Phí chờ = max(0, phút chờ − Phút chờ miễn phí) × Phí chờ/phút
 ```
 
-- **Phút chờ** được đếm từ lúc tài xế bấm *"Đã đến điểm đón"* tới lúc bấm *"Bắt đầu chạy"*.
+- **Phút chờ** được đếm từ lúc tài xế bấm *"Đã đến điểm đón"* tới lúc bấm *"Bắt đầu chạy"*. Số phút lẻ được bỏ, ví dụ chờ 12 phút 50 giây tính là 12 phút.
+- **Phút chờ miễn phí** do admin đặt riêng cho từng loại xe ở trang *Bảng giá cước*, **không cố định 10 phút**.
 - **Mục đích:** khách có một khoảng miễn phí để chuẩn bị. Quá thời gian đó thì tài xế được trả cho thời gian chờ và không thể nhận cuốc khác.
+
+**Chờ khách tại điểm đón:**
+
+1. Từ lúc tài xế bấm *"Đã đến điểm đón"*, cả app khách và app tài xế hiện **đồng hồ đếm ngược** thời gian chờ miễn phí.
+2. Hết thời gian miễn phí, đồng hồ chuyển sang **"Đang tính phí chờ X đ/phút"** và hiện số tiền phí chờ tăng dần theo thời gian thực.
+3. Tài xế gọi xác nhận với khách, sau đó chọn một trong hai:
+   - **"Khách vẫn đi, chờ tiếp":** khách nhận thông báo *"Tài xế tiếp tục chờ bạn, phí chờ đang được tính"*. Phí chờ tiếp tục tính cho tới lúc bắt đầu chạy.
+   - **Hủy chuyến vì khách vắng mặt / không giao xe:** không trừ tỉ lệ hoàn thành của tài xế (xem mục 8).
+
+Phí chờ luôn được tính theo công thức trên, dù tài xế có bấm *"Khách vẫn đi, chờ tiếp"* hay không. Nút này chỉ để báo cho khách biết.
 
 ## 4. Phí vượt quãng đường
 
@@ -128,6 +139,45 @@ DRIVO thực thu    = Giá cuối − Tài xế thực nhận  (= Hoa hồng −
 - Vì vậy khi admin sửa bảng giá, **các chuyến đặt trước đó vẫn tính theo giá cũ**. Khách không bị đổi giá giữa chừng.
 - Nếu không có bảng giá nào đang bật, hệ thống dùng bảng giá mặc định cài sẵn trong code.
 
+## 8. Hủy chuyến
+
+Hiện **không thu phí hủy** ở cả hai phía. Khi hủy, khách và tài xế đều phải chọn lý do. Lý do được lưu kèm chuyến, và bên còn lại nhận thông báo có ghi lý do. Nếu chuyến đã áp voucher thì lượt dùng được trả lại (mục 5).
+
+Mỗi lần hủy được ghi nhận là **có hoặc không tính lỗi tài xế**. Chỉ những lần hủy tính lỗi mới làm giảm **tỉ lệ hoàn thành** của tài xế.
+
+**Khách hủy:**
+
+| Lý do | Tính lỗi tài xế |
+|---|---|
+| Thay đổi kế hoạch | Không |
+| Chờ tài xế quá lâu | Không |
+| Đặt nhầm địa chỉ | Không |
+| Lý do khác (bắt buộc ghi rõ) | Không |
+| **Tài xế yêu cầu tôi hủy** | **Có**, để chặn trường hợp tài xế nhờ khách hủy hộ nhằm tránh bị trừ tỉ lệ |
+
+**Tài xế hủy:**
+
+| Lý do | Điều kiện | Tính lỗi tài xế |
+|---|---|---|
+| Khách không có mặt | Đã đến điểm đón **và** đã chờ hết thời gian chờ miễn phí | Không |
+| Không nhận được xe của khách | Đã đến điểm đón **và** đã chờ hết thời gian chờ miễn phí | Không |
+| Khách báo không đi nữa | Đã đến điểm đón (không cần chờ hết thời gian miễn phí) | Không |
+| Tài xế có việc cá nhân | Bất kỳ lúc nào trước khi bắt đầu chạy | Có |
+| Xe điện gấp gặp sự cố | Bất kỳ lúc nào trước khi bắt đầu chạy | Có |
+| Lý do khác (bắt buộc ghi rõ) | Bất kỳ lúc nào trước khi bắt đầu chạy | Có |
+
+Khi chuyến đang chạy thì tài xế không thể hủy. Server tự kiểm tra lại các điều kiện trên, nên dù app gửi yêu cầu sai thì cũng bị từ chối.
+
+**Tỉ lệ hoàn thành của tài xế** (tính trong 30 ngày gần nhất):
+
+```
+Tỉ lệ hoàn thành = Chuyến hoàn thành / (Chuyến hoàn thành + Lần hủy tính lỗi tài xế)
+```
+
+- Tài xế có dưới 3 chuyến thì chưa đủ dữ liệu. Khi điều phối, hệ thống tạm tính tài xế đó ở mức 90%.
+- Tỉ lệ này chiếm **20% điểm xếp hạng** khi điều phối cuốc. 80% còn lại gồm 60% khoảng cách và 20% số sao đánh giá.
+- Admin xem tỉ lệ ở trang *Tài xế* (cột *Tỉ lệ hoàn thành*) và trong chi tiết tài xế (tab *Tỉ lệ hoàn thành & hủy*, liệt kê từng lần hủy kèm lý do).
+
 ---
 
 ## Bảng giá hiện tại
@@ -171,4 +221,6 @@ Có thể kiểm tra lại ví dụ bằng **máy tính thử giá** ở trang *
 - Làm tròn và khoảng cách: `drivo-api/src/DrivoApi.Application/Common/GeoUtils.cs`
 - Cấu hình bảng giá: `drivo-admin/src/pages/PricingPage.tsx`
 - Voucher và thanh toán: `BookingService.cs` (`ResolveVoucherAsync`, `CreateBookingAsync`, `CompleteBookingAsync`)
-- Cột database: `drivo-api/sql/002_maps_tracking_pricing.sql`, `drivo-api/sql/003_commission.sql`, `drivo-api/sql/004_payments_vouchers.sql`
+- Hủy chuyến, chờ khách: `BookingService.cs` (`CancelBookingAsync`, `CancelBookingByDriverAsync`, `KeepWaitingAsync`), app: `drivo-mobile/lib/core/widgets/trip_cancel_wait.dart`
+- Tỉ lệ hoàn thành: `drivo-api/src/DrivoApi.Infrastructure/DriverCompletionStats.cs`
+- Cột database: `drivo-api/sql/002_maps_tracking_pricing.sql`, `drivo-api/sql/003_commission.sql`, `drivo-api/sql/004_payments_vouchers.sql`, `drivo-api/sql/008_cancel_fault_waiting.sql`
