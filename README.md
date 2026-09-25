@@ -38,6 +38,7 @@ git checkout haidang174
 
 - Nếu cài **SQL Server Express**: `.\setup-db.ps1 -Server "localhost\SQLEXPRESS"`
 - Nếu đăng nhập bằng **tài khoản SQL**: `.\setup-db.ps1 -User sa -Password "MatKhau"`
+- Không chạy được PowerShell? Mở file **`DRIVO_Database_Full.sql`** bằng SQL Server Management Studio rồi bấm *Execute*. File này gộp sẵn `DRIVO_Database_V2.sql` và toàn bộ `drivo-api/sql/00x_*.sql`, có kết quả giống hệt `setup-db.ps1`. Mỗi khi thêm file `00x` mới, tạo lại file này bằng lệnh `.\setup-db.ps1 -ExportTo DRIVO_Database_Full.sql`.
 
 Trong hai trường hợp này, sửa thêm chuỗi kết nối trong `drivo-api/src/DrivoApi.WebApi/appsettings.json` cho khớp:
 

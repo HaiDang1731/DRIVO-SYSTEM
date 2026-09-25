@@ -4,11 +4,13 @@
 #   .\setup-db.ps1                                   # SQL Server tại localhost, đăng nhập Windows, DB tên DrivoDB
 #   .\setup-db.ps1 -Server "localhost\SQLEXPRESS"    # SQL Server Express
 #   .\setup-db.ps1 -Server localhost -User sa -Password "MatKhau@123"   # đăng nhập bằng tài khoản SQL
+#   .\setup-db.ps1 -ExportTo DRIVO_Database_Full.sql  # chỉ gộp V2 + 00x thành 1 file SQL (mở bằng SSMS chạy), không kết nối DB
 param(
     [string]$Server = 'localhost',
     [string]$Database = 'DrivoDB',
     [string]$User,
-    [string]$Password
+    [string]$Password,
+    [string]$ExportTo
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +32,36 @@ function Invoke-SqlFile($conn, [string]$path, [string]$replaceDbWith) {
         $cmd.CommandTimeout = 300
         [void]$cmd.ExecuteNonQuery()
     }
+}
+
+# Gộp toàn bộ script thành 1 file (đúng thứ tự như lúc cài) để chạy tay trong SSMS / sqlcmd.
+if ($ExportTo) {
+    $files = @(Get-Item "$PSScriptRoot\DRIVO_Database_V2.sql") + @(Get-ChildItem "$PSScriptRoot\drivo-api\sql\00*.sql" | Sort-Object Name)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('/* =========================================================')
+    [void]$sb.AppendLine('   DRIVO - toàn bộ database trong 1 file. Tự sinh bởi: .\setup-db.ps1 -ExportTo <file>')
+    [void]$sb.AppendLine('   Đừng sửa tay file này: sửa DRIVO_Database_V2.sql / drivo-api/sql/00x_*.sql rồi xuất lại.')
+    [void]$sb.AppendLine("   Gồm: $(($files | ForEach-Object { $_.Name }) -join ', ')")
+    [void]$sb.AppendLine('   Chạy: mở bằng SQL Server Management Studio rồi bấm Execute, hoặc')
+    [void]$sb.AppendLine("         sqlcmd -S localhost -E -C -I -f 65001 -i $(Split-Path $ExportTo -Leaf)")
+    [void]$sb.AppendLine('   Chạy lại nhiều lần vẫn an toàn, không xóa dữ liệu.')
+    [void]$sb.AppendLine('   ========================================================= */')
+    foreach ($f in $files) {
+        $sql = Get-Content $f.FullName -Raw -Encoding UTF8
+        if ($Database -ne 'DrivoDB') { $sql = $sql -replace '\bDrivoDB\b', $Database }
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine("/* ======================= $($f.Name) ======================= */")
+        if ($f.Name -ne 'DRIVO_Database_V2.sql') {
+            [void]$sb.AppendLine("USE [$Database];")
+            [void]$sb.AppendLine('GO')
+        }
+        [void]$sb.AppendLine($sql.TrimEnd())
+        [void]$sb.AppendLine('GO')
+    }
+    $out = if ([IO.Path]::IsPathRooted($ExportTo)) { $ExportTo } else { Join-Path (Get-Location) $ExportTo }
+    [IO.File]::WriteAllText($out, $sb.ToString(), (New-Object System.Text.UTF8Encoding($true)))
+    Write-Host "Đã xuất $($files.Count) script vào $out" -ForegroundColor Green
+    exit 0
 }
 
 try {
