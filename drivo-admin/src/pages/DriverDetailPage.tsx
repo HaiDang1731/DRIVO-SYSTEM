@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../services/api';
+import { api, type DriverCompletion, type DriverCancellation } from '../services/api';
+import { completionColor } from '../components/CompletionRate';
 import { Avatar } from '../components/Avatar';
 import { Badge } from '../components/Badge';
 import { DriverLocationCard } from '../components/DriverLocationCard';
@@ -9,7 +10,8 @@ import { DriverProfilePanel } from '../components/DriverProfilePanel';
 export default function DriverDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'profile' | 'trips' | 'ratings' | 'history' | 'revenue'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'trips' | 'ratings' | 'history' | 'revenue' | 'completion'>('profile');
+  const [completion, setCompletion] = useState<{ summary: DriverCompletion; cancellations: DriverCancellation[] } | null>(null);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [resettingPassword, setResettingPassword] = useState(false);
@@ -19,7 +21,8 @@ export default function DriverDetailPage() {
   const fetchDetail = async () => {
     if (!id) return;
     setLoading(true);
-    const res = await api.getDriver(id);
+    const [res, comp] = await Promise.all([api.getDriver(id), api.getDriverCompletion(id)]);
+    if (comp.success) setCompletion(comp.data);
     if (res.success) {
       setData(res.data);
     } else {
@@ -145,6 +148,18 @@ export default function DriverDetailPage() {
                     {data.verificationStatus}
                   </Badge>
                 </div>
+                {completion && (
+                  <div
+                    style={{ marginTop: 12, cursor: 'pointer' }}
+                    title="Xem chi tiết các lần hủy"
+                    onClick={() => setActiveTab('completion')}
+                  >
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Tỉ lệ hoàn thành {completion.summary.windowDays} ngày</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: completionColor(completion.summary.rate) }}>
+                      {completion.summary.rate == null ? 'Chưa đủ dữ liệu' : `${completion.summary.rate}%`}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button
@@ -160,6 +175,13 @@ export default function DriverDetailPage() {
                 onClick={() => setActiveTab('trips')}
               >
                 🚗 Chuyến đi ({data.trips?.length || 0})
+              </button>
+              <button
+                className={`btn btn-sm ${activeTab === 'completion' ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ justifyContent: 'flex-start' }}
+                onClick={() => setActiveTab('completion')}
+              >
+                📊 Tỉ lệ hoàn thành & hủy ({completion?.cancellations.length ?? 0})
               </button>
               <button
                 className={`btn btn-sm ${activeTab === 'ratings' ? 'btn-primary' : 'btn-ghost'}`}
@@ -279,6 +301,61 @@ export default function DriverDetailPage() {
                   ) : (
                     <div style={{ padding: 40, textAlign: 'center', background: 'var(--bg-secondary)', borderRadius: 8, color: 'var(--text-muted)' }}>
                       🚗 Tài xế này chưa có chuyến đi nào trong cơ sở dữ liệu.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'completion' && completion && (
+                <div>
+                  <h4 style={{ marginBottom: 6, color: 'var(--text-primary)' }}>Tỉ Lệ Hoàn Thành ({completion.summary.windowDays} ngày gần nhất)</h4>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginBottom: 16 }}>
+                    = chuyến hoàn thành / (hoàn thành + lần hủy do lỗi tài xế). Khách tự hủy, khách vắng mặt, không giao xe
+                    <b> không</b> bị tính. Đây cũng là con số chiếm 20% điểm khi điều phối cuốc
+                    {' '}(dưới {completion.summary.minTrips} chuyến: tạm tính 90%).
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+                    {[
+                      { label: 'Tỉ lệ hoàn thành', value: completion.summary.rate == null ? 'Chưa đủ dữ liệu' : `${completion.summary.rate}%`, color: completionColor(completion.summary.rate) },
+                      { label: 'Chuyến hoàn thành', value: completion.summary.completed, color: '#2ED573' },
+                      { label: 'Hủy do lỗi tài xế', value: completion.summary.driverFaultCancelled, color: '#FF4757' },
+                      { label: 'Hủy không tính lỗi', value: completion.summary.noFaultCancelled, color: 'var(--text-secondary)' },
+                    ].map((k) => (
+                      <div key={k.label} style={{ padding: 16, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>{k.label}</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: k.color }}>{k.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <h4 style={{ marginBottom: 12, color: 'var(--text-primary)' }}>Các lần hủy gần đây</h4>
+                  {completion.cancellations.length > 0 ? (
+                    <div className="table-responsive">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Mã chuyến</th>
+                            <th>Người hủy</th>
+                            <th>Lý do</th>
+                            <th>Tính lỗi tài xế</th>
+                            <th>Thời gian</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {completion.cancellations.map((c) => (
+                            <tr key={c.bookingId} style={{ cursor: 'pointer' }} onClick={() => navigate(`/bookings/${c.bookingId}`)}>
+                              <td><strong style={{ color: 'var(--accent)' }}>{c.bookingCode}</strong></td>
+                              <td>{({ CUSTOMER: 'Khách hàng', DRIVER: 'Tài xế', ADMIN: 'Admin', SYSTEM: 'Hệ thống' } as Record<string, string>)[c.cancelledBy ?? ''] || c.cancelledBy || '-'}</td>
+                              <td>{c.reason || '-'}</td>
+                              <td><Badge type={c.driverAtFault ? 'danger' : 'success'}>{c.driverAtFault ? 'Có' : 'Không'}</Badge></td>
+                              <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{formatDate(c.cancelledAt ?? undefined)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ padding: 40, textAlign: 'center', background: 'var(--bg-secondary)', borderRadius: 8, color: 'var(--text-muted)' }}>
+                      ✅ Không có lần hủy nào trong {completion.summary.windowDays} ngày gần nhất.
                     </div>
                   )}
                 </div>

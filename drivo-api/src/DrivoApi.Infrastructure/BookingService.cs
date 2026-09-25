@@ -847,7 +847,6 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
     private const double WeightDistance = 0.6, WeightRating = 0.2, WeightCompletion = 0.2;
     /// <summary>Tài xế chưa đủ dữ liệu được tính mức trung bình khá (≈ 4,5 sao / 90% hoàn thành).</summary>
     private const double DefaultRatingScore = 0.9, DefaultCompletionScore = 0.9;
-    private const int MinTripsForCompletionRate = 3;
 
     private sealed record DriverCandidate(int DriverId, double Km, double Score);
 
@@ -873,24 +872,15 @@ public class BookingService(DrivoDbContext db, IMapsService maps, ITrackingNotif
             .ToList();
         if (nearby.Count == 0) return [];
 
-        // Tỉ lệ hoàn thành 30 ngày: hoàn thành / (hoàn thành + lần hủy do lỗi tài xế). Khách hủy, khách vắng mặt không tính cho tài xế.
-        var ids = nearby.Select(d => d.Id).ToList();
-        var from = DateTime.UtcNow.AddDays(-30);
-        var stats = await db.Bookings.AsNoTracking()
-            .Where(x => x.DriverId != null && ids.Contains(x.DriverId.Value) && x.CreatedAt >= from &&
-                        (x.Status == BookingStatus.Completed || (x.Status == BookingStatus.Cancelled && x.DriverAtFault)))
-            .GroupBy(x => x.DriverId!.Value)
-            .Select(g => new { DriverId = g.Key, Completed = g.Count(x => x.Status == BookingStatus.Completed), Total = g.Count() })
-            .ToDictionaryAsync(x => x.DriverId);
+        // Tỉ lệ hoàn thành 30 ngày (cùng công thức admin thấy): khách hủy, khách vắng mặt không tính cho tài xế.
+        var stats = await DriverCompletionStats.QueryAsync(db, nearby.Select(d => d.Id).ToList());
 
         return nearby
             .Select(d =>
             {
                 var distance = 1.0 - d.Km / PendingSearchRadiusKm;
                 var rating = d.RatingCount > 0 ? (double)d.RatingAverage / 5.0 : DefaultRatingScore;
-                var completion = stats.TryGetValue(d.Id, out var s) && s.Total >= MinTripsForCompletionRate
-                    ? (double)s.Completed / s.Total
-                    : DefaultCompletionScore;
+                var completion = stats[d.Id].Rate is double pct ? pct / 100.0 : DefaultCompletionScore;
                 return new DriverCandidate(d.Id, d.Km, WeightDistance * distance + WeightRating * rating + WeightCompletion * completion);
             })
             .OrderByDescending(c => c.Score)

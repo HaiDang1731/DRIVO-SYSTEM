@@ -59,6 +59,25 @@ export interface DriverProfileFields {
   bankAccountHolder?: string | null;
 }
 
+/** Tỉ lệ hoàn thành 30 ngày = hoàn thành / (hoàn thành + hủy do lỗi tài xế). rate null = chưa đủ dữ liệu. */
+export interface DriverCompletion {
+  completed: number;
+  driverFaultCancelled: number;
+  noFaultCancelled: number;
+  rate?: number | null;
+  windowDays: number;
+  minTrips: number;
+}
+
+export interface DriverCancellation {
+  bookingId: number;
+  bookingCode: string;
+  cancelledBy?: string | null;
+  reason?: string | null;
+  driverAtFault: boolean;
+  cancelledAt?: string | null;
+}
+
 // ── Typed DTOs (camelCase, see maps-contract.md) ──
 export interface ApiResponse<T> {
   success: boolean;
@@ -248,6 +267,7 @@ export const api = {
     api.request(`/admin/drivers?${status ? `verificationStatus=${status}&` : ''}page=${page}&pageSize=${pageSize}`),
 
   getDriver: (id: string | number) => api.request(`/admin/drivers/${id}`),
+  getDriverCompletion: (id: string | number) => api.request(`/admin/drivers/${id}/completion`),
 
   /** Sửa hồ sơ tài xế: chỉ gửi trường cần đổi (chuỗi rỗng = xóa) */
   updateDriverProfile: (id: string | number, data: Partial<DriverProfileFields>) =>
