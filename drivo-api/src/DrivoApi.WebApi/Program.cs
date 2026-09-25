@@ -54,7 +54,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 // SignalR
-builder.Services.AddSignalR();
+builder.Services.AddSignalR()
+    .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new DrivoApi.WebApi.UtcDateTimeConverter()));
 
 // CORS (Permissive for development & testing Web App)
 builder.Services.AddCors(options =>
@@ -71,6 +72,7 @@ builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.Converters.Add(new DrivoApi.WebApi.UtcDateTimeConverter()); // giờ UTC luôn kèm Z
     });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
