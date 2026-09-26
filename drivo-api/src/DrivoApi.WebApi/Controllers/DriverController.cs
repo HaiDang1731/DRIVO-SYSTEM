@@ -73,6 +73,42 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
         return result.Success ? Ok(result) : BadRequest(result);
     }
 
+    // ── Ví tài xế ────────────────────────────────────────────
+
+    /// <summary>Số dư, mức ký quỹ, tài khoản DRIVO để nạp, lịch sử giao dịch</summary>
+    [HttpGet("wallet")]
+    public async Task<IActionResult> GetWallet([FromServices] IDriverWalletService wallet)
+    {
+        var result = await wallet.GetMyWalletAsync(CurrentUserId);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Tạo yêu cầu nạp tiền (trả về nội dung chuyển khoản), admin duyệt sau khi nhận tiền</summary>
+    [HttpPost("wallet/topup")]
+    public async Task<IActionResult> Topup([FromBody] DrivoApi.Application.DTOs.Wallet.WalletAmountRequest req,
+        [FromServices] IDriverWalletService wallet)
+    {
+        var result = await wallet.RequestTopupAsync(CurrentUserId, req.Amount);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Tạo yêu cầu rút tiền (chỉ phần vượt mức ký quỹ)</summary>
+    [HttpPost("wallet/withdraw")]
+    public async Task<IActionResult> Withdraw([FromBody] DrivoApi.Application.DTOs.Wallet.WalletAmountRequest req,
+        [FromServices] IDriverWalletService wallet)
+    {
+        var result = await wallet.RequestWithdrawAsync(CurrentUserId, req.Amount);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Tài xế hủy yêu cầu nạp/rút đang chờ</summary>
+    [HttpPost("wallet/requests/{id:long}/cancel")]
+    public async Task<IActionResult> CancelWalletRequest(long id, [FromServices] IDriverWalletService wallet)
+    {
+        var result = await wallet.CancelMyRequestAsync(CurrentUserId, id);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
     /// <summary>Kiểm tra chữ ký đầu file (JPEG / PNG / WEBP), không tin Content-Type client gửi.</summary>
     private static async Task<bool> LooksLikeImageAsync(IFormFile file)
     {
@@ -142,6 +178,14 @@ public class DriverController(IDriverProfileService driverProfileService, IBooki
     public async Task<IActionResult> CancelBooking(long id, [FromBody] DrivoApi.Application.DTOs.Booking.CancelBookingRequest request)
     {
         var result = await bookingService.CancelBookingByDriverAsync(id, CurrentUserId, request);
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>Tài xế xác nhận khách vẫn đi, tiếp tục chờ (sau thời gian chờ miễn phí) -> báo khách phí chờ bắt đầu tính</summary>
+    [HttpPost("bookings/{id:long}/keep-waiting")]
+    public async Task<IActionResult> KeepWaiting(long id)
+    {
+        var result = await bookingService.KeepWaitingAsync(id, CurrentUserId);
         return result.Success ? Ok(result) : BadRequest(result);
     }
 

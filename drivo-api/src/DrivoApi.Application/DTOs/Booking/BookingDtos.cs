@@ -78,8 +78,26 @@ public class CheckVoucherResponse
     public decimal Discount { get; set; }
 }
 
+public class CustomerSummaryResponse
+{
+    public string FullName { get; set; } = null!;
+    public string Phone { get; set; } = null!;
+    public string? Email { get; set; }
+    public DateTime MemberSince { get; set; }
+    public int CompletedTrips { get; set; }
+    public int CancelledTrips { get; set; }
+    /// <summary>Tổng khách đã trả cho các chuyến hoàn thành.</summary>
+    public decimal TotalSpent { get; set; }
+    /// <summary>Tổng tiền được giảm nhờ mã khuyến mãi.</summary>
+    public decimal TotalSaved { get; set; }
+    public decimal TotalDistanceKm { get; set; }
+}
+
 public class CancelBookingRequest
 {
+    /// <summary>Mã lý do (xem CancelReasons). Null = dùng Reason tự do.</summary>
+    public string? ReasonCode { get; set; }
+    /// <summary>Ghi chú thêm (bắt buộc khi ReasonCode = OTHER).</summary>
     public string? Reason { get; set; }
 }
 
@@ -140,8 +158,16 @@ public class BookingDetailResponse
     public DateTime? ArrivedAt { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+    public string? CancelledBy { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    /// <summary>Tài xế đã xác nhận tiếp tục chờ khách (sau thời gian miễn phí).</summary>
+    public DateTime? WaitExtendedAt { get; set; }
+    /// <summary>Quy tắc phí chờ áp dụng cho cuốc (để app đếm giờ chờ tại điểm đón).</summary>
+    public int FreeWaitingMin { get; set; }
+    public decimal WaitingPricePerMin { get; set; }
 
-    // Vị trí hiện tại của tài xế (chỉ khi đã có tài xế nhận)
+    // Vị trí hiện tại) của tài xế (chỉ khi đã có tài xế nhận)
     public decimal? DriverLatitude { get; set; }
     public decimal? DriverLongitude { get; set; }
     public DateTime? DriverLastLocationAt { get; set; }
@@ -216,9 +242,7 @@ public class AdminBookingDetailResponse : BookingDetailResponse
     /// <summary>Lịch sử gửi cuốc lần lượt cho từng tài xế.</summary>
     public List<BookingOfferDto> Offers { get; set; } = [];
     public AdminBookingCustomerDto Customer { get; set; } = null!;
-    public string? CancelledBy { get; set; }
-    public string? CancellationReason { get; set; }
-    public DateTime? CancelledAt { get; set; }
+    public bool DriverAtFault { get; set; }
     public List<TrailPointDto> Trail { get; set; } = [];
     public List<BookingStatusHistoryDto> StatusHistory { get; set; } = [];
     public PricingRuleSnapshotDto? PricingRule { get; set; }

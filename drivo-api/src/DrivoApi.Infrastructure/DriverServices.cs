@@ -215,7 +215,39 @@ public class AdminDriverService(DrivoDbContext db) : IAdminDriverService
             .ToListAsync();
         foreach (var x in drivers) x.LicenseNumber = DriverProfileEditor.DisplayLicense(x.LicenseNumber);
 
+        var completion = await DriverCompletionStats.QueryAsync(db, drivers.Select(x => x.DriverId).ToList());
+        foreach (var x in drivers) x.Completion = completion[x.DriverId];
+
         return BaseResponse<List<DriverListResponse>>.Ok(drivers);
+    }
+
+    public async Task<BaseResponse<DriverCompletionDetailDto>> GetDriverCompletionAsync(int driverId)
+    {
+        if (!await db.Drivers.AnyAsync(d => d.Id == driverId))
+            return BaseResponse<DriverCompletionDetailDto>.Fail("Không tìm thấy tài xế.");
+
+        var stats = await DriverCompletionStats.QueryAsync(db, [driverId]);
+        var from = DateTime.UtcNow.AddDays(-DriverCompletionStats.WindowDays);
+        var cancels = await db.Bookings.AsNoTracking()
+            .Where(b => b.DriverId == driverId && b.Status == BookingStatus.Cancelled && b.CreatedAt >= from)
+            .OrderByDescending(b => b.CancelledAt ?? b.CreatedAt)
+            .Take(50)
+            .Select(b => new DriverCancellationDto
+            {
+                BookingId = b.Id,
+                BookingCode = b.BookingCode,
+                CancelledBy = b.CancelledBy,
+                Reason = b.CancellationReason,
+                DriverAtFault = b.DriverAtFault,
+                CancelledAt = b.CancelledAt
+            })
+            .ToListAsync();
+
+        return BaseResponse<DriverCompletionDetailDto>.Ok(new DriverCompletionDetailDto
+        {
+            Summary = stats[driverId],
+            Cancellations = cancels
+        });
     }
 
     private Task<Driver?> LoadDetailAsync(int driverId) => db.Drivers

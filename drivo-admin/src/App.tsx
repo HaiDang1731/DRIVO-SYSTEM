@@ -11,6 +11,7 @@ import { BookingsPage } from './pages/BookingsPage';
 import { BookingDetailPage } from './pages/BookingDetailPage';
 import { LiveMapPage } from './pages/LiveMapPage';
 import { PaymentsPage } from './pages/PaymentsPage';
+import { WalletsPage } from './pages/WalletsPage';
 import { PricingPage } from './pages/PricingPage';
 import { VouchersPage } from './pages/VouchersPage';
 import { NotificationsPage } from './pages/NotificationsPage';
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="/bookings" element={<BookingsPage />} />
             <Route path="/bookings/:id" element={<BookingDetailPage />} />
             <Route path="/payments" element={<PaymentsPage />} />
+            <Route path="/wallets" element={<WalletsPage />} />
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/vouchers" element={<VouchersPage />} />
             <Route path="/notifications" element={<NotificationsPage />} />

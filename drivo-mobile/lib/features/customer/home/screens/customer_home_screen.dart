@@ -1,9 +1,12 @@
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../vehicles/screens/customer_vehicles_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../../../core/api_service.dart';
 import '../../booking/screens/customer_booking_screen.dart';
+import '../../profile/customer_account_screens.dart';
 
 // ═══════════════════════════════════════════════
 //   DRIVO Customer Home Screen  — Premium Design
@@ -58,6 +61,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
   }
 
   List<VoucherInfo> _vouchers = [];
+  int _profileRefresh = 0;
+  /// Thông tin người dùng hiện tại (đổi được ở tab Tài khoản).
+  late AuthUser _user = widget.user;
 
   Future<void> _loadVouchers() async {
     try {
@@ -90,7 +96,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     Navigator.of(context).push(
       PageRouteBuilder(
         pageBuilder: (_, animation, __) => CustomerBookingScreen(
-          user: widget.user,
+          user: _user,
           initialActiveBooking: _activeBooking,
           initialVoucherCode: voucherCode,
         ),
@@ -108,6 +114,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
     ).then((_) {
       _checkActiveBooking();
       _loadVouchers(); // mã vừa dùng sẽ biến khỏi danh sách
+      if (mounted) setState(() => _profileRefresh++); // số chuyến / tổng chi ở tab Tài khoản
     });
   }
 
@@ -125,7 +132,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
         index: _currentTab,
         children: [
           _HomeTabView(
-            user: widget.user,
+            user: _user,
             activeBooking: _activeBooking,
             onOpenBooking: _openBooking,
             vouchers: _vouchers,
@@ -133,9 +140,14 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen>
             pulseAnim: _pulseAnim ?? const AlwaysStoppedAnimation(1.0),
             floatAnim: _floatAnim ?? const AlwaysStoppedAnimation(0.0),
           ),
-          _ActivityTabView(user: widget.user, onOpenBooking: _openBooking),
+          _ActivityTabView(user: _user, onOpenBooking: _openBooking),
           _SupportTabView(),
-          _ProfileTabView(user: widget.user, onLogout: widget.onLogout),
+          _ProfileTabView(
+            key: ValueKey(_profileRefresh),
+            user: _user,
+            onLogout: widget.onLogout,
+            onUserUpdated: (u) => setState(() => _user = u),
+          ),
         ],
       ),
       bottomNavigationBar: _buildBottomBar(),
@@ -1327,7 +1339,8 @@ class _SupportTabView extends StatelessWidget {
 class _ProfileTabView extends StatefulWidget {
   final AuthUser user;
   final VoidCallback onLogout;
-  const _ProfileTabView({required this.user, required this.onLogout});
+  final ValueChanged<AuthUser> onUserUpdated;
+  const _ProfileTabView({super.key, required this.user, required this.onLogout, required this.onUserUpdated});
 
   @override
   State<_ProfileTabView> createState() => _ProfileTabViewState();
@@ -1335,37 +1348,205 @@ class _ProfileTabView extends StatefulWidget {
 
 class _ProfileTabViewState extends State<_ProfileTabView> {
   late AuthUser _currentUser;
-  bool _editing = false;
-  bool _saving = false;
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
+
+  Map<String, dynamic>? _summary;
+  int _unread = 0;
 
   @override
   void initState() {
     super.initState();
     _currentUser = widget.user;
-    _nameCtrl.text = _currentUser.fullName;
-    _emailCtrl.text = _currentUser.email ?? '';
+    _loadSummary();
   }
 
-  Future<void> _saveProfile() async {
-    setState(() => _saving = true);
-    final res = await ApiService.updateUserProfile({'fullName': _nameCtrl.text, 'email': _emailCtrl.text});
-    if (res['success'] == true && res['data'] != null) {
-      if (mounted) {
-        setState(() {
-          _currentUser = AuthUser.fromJson(res['data']);
-          _editing = false;
-          _saving = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cập nhật thông tin thành công'), backgroundColor: Color(0xFF10B981)));
-      }
-    } else {
-      if (mounted) {
-        setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res['message'] ?? 'Có lỗi xảy ra'), backgroundColor: const Color(0xFFEF4444)));
-      }
+  /// Sửa họ tên / SĐT / email. Đổi SĐT (tên đăng nhập) phải nhập mật khẩu hiện tại.
+  Future<void> _showEditSheet() async {
+    final nameCtrl = TextEditingController(text: _currentUser.fullName);
+    final phoneCtrl = TextEditingController(text: _currentUser.phone);
+    final emailCtrl = TextEditingController(text: _currentUser.email ?? '');
+    final pwCtrl = TextEditingController();
+    String? error;
+    bool saving = false;
+
+    InputDecoration deco(String label, {String? hint, IconData? icon}) => InputDecoration(
+          labelText: label,
+          hintText: hint,
+          prefixIcon: icon == null ? null : Icon(icon, color: Colors.white38, size: 20),
+          labelStyle: const TextStyle(color: Colors.white54),
+          hintStyle: const TextStyle(color: Colors.white24),
+          filled: true,
+          fillColor: Colors.white.withValues(alpha: 0.05),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        );
+
+    final updated = await showModalBottomSheet<AuthUser>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF111827),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        final phoneChanged = phoneCtrl.text.trim() != _currentUser.phone;
+        Future<void> save() async {
+          if (nameCtrl.text.trim().length < 2) {
+            setSheet(() => error = 'Vui lòng nhập họ tên.');
+            return;
+          }
+          if (phoneChanged && pwCtrl.text.isEmpty) {
+            setSheet(() => error = 'Nhập mật khẩu hiện tại để đổi số điện thoại.');
+            return;
+          }
+          setSheet(() {
+            saving = true;
+            error = null;
+          });
+          final res = await ApiService.updateUserProfile({
+            'fullName': nameCtrl.text.trim(),
+            'email': emailCtrl.text.trim(),
+            'phone': phoneCtrl.text.trim(),
+            if (phoneChanged) 'currentPassword': pwCtrl.text,
+          });
+          if (!ctx.mounted) return;
+          if (res['success'] == true && res['data'] != null) {
+            // Lưu lại để mở app lần sau vẫn đúng tên/SĐT mới
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('user_json', jsonEncode(res['data']));
+            if (!ctx.mounted) return;
+            FocusManager.instance.primaryFocus?.unfocus();
+            Navigator.pop(ctx, AuthUser.fromJson(res['data']));
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(res['message']?.toString() ?? 'Cập nhật thông tin thành công'),
+                backgroundColor: const Color(0xFF10B981),
+              ));
+            }
+          } else {
+            setSheet(() {
+              saving = false;
+              error = res['message']?.toString() ?? 'Có lỗi xảy ra';
+            });
+          }
+        }
+
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Center(
+                child: Container(
+                    width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+              ),
+              const SizedBox(height: 14),
+              Text('Thông tin cá nhân', style: GoogleFonts.inter(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: nameCtrl,
+                style: const TextStyle(color: Colors.white),
+                textCapitalization: TextCapitalization.words,
+                decoration: deco('Họ và tên', icon: Icons.person_outline),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneCtrl,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.phone,
+                onChanged: (_) => setSheet(() {}),
+                decoration: deco('Số điện thoại (dùng để đăng nhập)', icon: Icons.phone_outlined),
+              ),
+              if (phoneChanged) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwCtrl,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: deco('Mật khẩu hiện tại', hint: 'Bắt buộc khi đổi số điện thoại', icon: Icons.lock_outline),
+                ),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: emailCtrl,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.emailAddress,
+                decoration: deco('Email (không bắt buộc)', icon: Icons.email_outlined),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 12),
+                Text(error!, style: GoogleFonts.inter(color: const Color(0xFFEF4444), fontSize: 13)),
+              ],
+              const SizedBox(height: 18),
+              Row(children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: saving ? null : () => Navigator.pop(ctx),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('Hủy'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: saving ? null : save,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6C63FF),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: saving
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                        : Text('Lưu', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ]),
+            ]),
+          ),
+        );
+      }),
+    );
+
+    // Đợi hộp đóng hẳn rồi mới huỷ controller (hộp vẫn vẽ ô nhập trong lúc trượt xuống)
+    await Future.delayed(const Duration(milliseconds: 400));
+    for (final c in [nameCtrl, phoneCtrl, emailCtrl, pwCtrl]) {
+      c.dispose();
     }
+    if (updated != null && mounted) {
+      setState(() => _currentUser = updated);
+      widget.onUserUpdated(updated);
+    }
+  }
+
+  /// Số chuyến / tổng chi / tiết kiệm + số thông báo chưa đọc.
+  Future<void> _loadSummary() async {
+    final results = await Future.wait([
+      ApiService.get('/bookings/customer-summary'),
+      ApiService.get('/notifications?take=1'),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      if (results[0]['success'] == true) _summary = results[0]['data'];
+      if (results[1]['success'] == true) _unread = (results[1]['data']?['unread'] as num?)?.toInt() ?? 0;
+    });
+  }
+
+  Future<void> _openAndRefresh(Widget page) async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+    _loadSummary();
+  }
+
+  String get _memberSince {
+    final s = _summary?['memberSince']?.toString();
+    final d = s == null ? null : DateTime.tryParse(s);
+    return d == null ? '' : 'Thành viên từ ${d.month.toString().padLeft(2, '0')}/${d.year}';
+  }
+
+  String _shortVnd(double v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(v % 1000000 == 0 ? 0 : 1)}tr';
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(0)}K';
+    return v.toStringAsFixed(0);
   }
 
   void _showChangePasswordDialog() {
@@ -1432,7 +1613,10 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080C1A),
-      body: CustomScrollView(
+      body: RefreshIndicator(
+        onRefresh: _loadSummary,
+        child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           SliverToBoxAdapter(
             child: Container(
@@ -1458,62 +1642,23 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
                     ),
                     child: Center(
                       child: Text(
-                        _currentUser.fullName.isNotEmpty ? _currentUser.fullName[0].toUpperCase() : 'D',
+                        // Tên người Việt: lấy chữ đầu của tên (từ cuối), vd "Bùi Hải Đăng" -> "Đ"
+                        _currentUser.fullName.trim().isNotEmpty
+                            ? _currentUser.fullName.trim().split(' ').last[0].toUpperCase()
+                            : 'D',
                         style: GoogleFonts.poppins(fontSize: 30, fontWeight: FontWeight.w800, color: Colors.white),
                       ),
                     ),
                   ),
                   const SizedBox(height: 14),
-                  if (_editing) ...[
-                    TextField(
-                      controller: _nameCtrl,
-                      style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-                      textAlign: TextAlign.center,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        hintText: 'Họ và tên',
-                        hintStyle: TextStyle(color: Colors.white38),
-                      ),
-                    ),
-                    TextField(
-                      controller: _emailCtrl,
-                      style: GoogleFonts.inter(color: Colors.white70, fontSize: 14),
-                      textAlign: TextAlign.center,
-                      decoration: const InputDecoration(
-                        border: InputBorder.none,
-                        hintText: 'Email (Tùy chọn)',
-                        hintStyle: TextStyle(color: Colors.white38),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        TextButton(
-                          onPressed: _saving ? null : () => setState(() => _editing = false),
-                          child: Text('Hủy', style: GoogleFonts.inter(color: Colors.white54)),
-                        ),
-                        ElevatedButton(
-                          onPressed: _saving ? null : _saveProfile,
-                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6C63FF), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(50))),
-                          child: _saving
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : Text('Lưu', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
-                        ),
-                      ],
-                    ),
-                  ] else ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(_currentUser.fullName, style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white)),
                         IconButton(
                           icon: const Icon(Icons.edit_rounded, color: Colors.white54, size: 18),
-                          onPressed: () {
-                            _nameCtrl.text = _currentUser.fullName;
-                            _emailCtrl.text = _currentUser.email ?? '';
-                            setState(() => _editing = true);
-                          },
+                          tooltip: 'Sửa thông tin',
+                          onPressed: _showEditSheet,
                         ),
                       ],
                     ),
@@ -1523,14 +1668,20 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
                       const SizedBox(height: 2),
                       Text(_currentUser.email!, style: GoogleFonts.inter(fontSize: 14, color: Colors.white54)),
                     ],
-                  ],
+                    if (_memberSince.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(_memberSince, style: GoogleFonts.inter(fontSize: 12, color: Colors.white38)),
+                    ],
                   const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 10,
+                    runSpacing: 8,
                     children: [
-                      _statPill('0 Điểm', '⭐'),
-                      const SizedBox(width: 12),
-                      _statPill('0 Chuyến', '🚗'),
+                      _statPill('${_summary?['completedTrips'] ?? 0} chuyến', '🚗'),
+                      _statPill('Đã chi ${_shortVnd((_summary?['totalSpent'] as num?)?.toDouble() ?? 0)}', '💳'),
+                      if (((_summary?['totalSaved'] as num?) ?? 0) > 0)
+                        _statPill('Tiết kiệm ${_shortVnd((_summary!['totalSaved'] as num).toDouble())}', '🎁'),
                     ],
                   ),
                 ],
@@ -1543,14 +1694,17 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
               delegate: SliverChildListDelegate([
                 _menuGroup([
                   _menuItem(Icons.directions_car_filled_rounded, 'Danh sách xe của tôi', const Color(0xFF6C63FF), onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerVehiclesScreen()))),
-                  _menuItem(Icons.credit_card_rounded, 'Phương thức thanh toán', const Color(0xFF3B82F6)),
-                  _menuItem(Icons.receipt_long_rounded, 'Lịch sử giao dịch', const Color(0xFF06B6D4)),
+                  _menuItem(Icons.credit_card_rounded, 'Phương thức thanh toán', const Color(0xFF3B82F6),
+                      onTap: () => showPaymentMethodSheet(context)),
+                  _menuItem(Icons.receipt_long_rounded, 'Lịch sử giao dịch', const Color(0xFF06B6D4),
+                      onTap: () => _openAndRefresh(const TransactionHistoryScreen())),
                 ]),
                 const SizedBox(height: 12),
                 _menuGroup([
-                  _menuItem(Icons.notifications_rounded, 'Thông báo', const Color(0xFFF59E0B)),
+                  _menuItem(Icons.notifications_rounded, 'Thông báo', const Color(0xFFF59E0B),
+                      badge: _unread, onTap: () => _openAndRefresh(const NotificationsScreen())),
                   _menuItem(Icons.security_rounded, 'Bảo mật (Đổi mật khẩu)', const Color(0xFF10B981), onTap: _showChangePasswordDialog),
-                  _menuItem(Icons.info_outline_rounded, 'Về DRIVO v2.0', Colors.white38),
+                  _menuItem(Icons.info_outline_rounded, 'Về DRIVO', Colors.white38, onTap: () => showAboutDrivo(context)),
                 ]),
                 const SizedBox(height: 24),
                 GestureDetector(
@@ -1578,6 +1732,7 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -1604,7 +1759,7 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
     );
   }
 
-  Widget _menuItem(IconData icon, String title, Color color, {VoidCallback? onTap}) {
+  Widget _menuItem(IconData icon, String title, Color color, {VoidCallback? onTap, int badge = 0}) {
     return ListTile(
       leading: Container(
         width: 36,
@@ -1613,8 +1768,17 @@ class _ProfileTabViewState extends State<_ProfileTabView> {
         child: Icon(icon, color: color, size: 19),
       ),
       title: Text(title, style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-      trailing: Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
-      onTap: onTap ?? () {},
+      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (badge > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(color: const Color(0xFFEF4444), borderRadius: BorderRadius.circular(10)),
+            child: Text(badge > 99 ? '99+' : '$badge',
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+          ),
+        Icon(Icons.chevron_right_rounded, color: Colors.white24, size: 20),
+      ]),
+      onTap: onTap,
     );
   }
 }

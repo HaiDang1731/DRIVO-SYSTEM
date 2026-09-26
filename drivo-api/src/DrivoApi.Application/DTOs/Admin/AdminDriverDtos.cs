@@ -89,6 +89,37 @@ public class DriverTripSummaryDto
     public DateTime CreatedAt { get; set; }
 }
 
+/// <summary>Tỉ lệ hoàn thành 30 ngày (cùng công thức với điều phối cuốc).</summary>
+public class DriverCompletionDto
+{
+    public int Completed { get; set; }
+    /// <summary>Lần hủy tính lỗi tài xế (trừ tỉ lệ).</summary>
+    public int DriverFaultCancelled { get; set; }
+    /// <summary>Lần hủy không tính lỗi (khách hủy, khách vắng mặt...).</summary>
+    public int NoFaultCancelled { get; set; }
+    /// <summary>% hoàn thành; null = chưa đủ dữ liệu.</summary>
+    public double? Rate { get; set; }
+    public int WindowDays { get; set; } = 30;
+    public int MinTrips { get; set; } = 3;
+}
+
+public class DriverCancellationDto
+{
+    public long BookingId { get; set; }
+    public string BookingCode { get; set; } = null!;
+    public string? CancelledBy { get; set; }
+    public string? Reason { get; set; }
+    public bool DriverAtFault { get; set; }
+    public DateTime? CancelledAt { get; set; }
+}
+
+public class DriverCompletionDetailDto
+{
+    public DriverCompletionDto Summary { get; set; } = new();
+    /// <summary>Các lần hủy gần đây (30 ngày).</summary>
+    public List<DriverCancellationDto> Cancellations { get; set; } = [];
+}
+
 public class DriverRatingSummaryDto
 {
     public long Id { get; set; }
@@ -129,6 +160,7 @@ public class DriverListResponse
     /// <summary>Số ảnh giấy tờ đang chờ duyệt.</summary>
     public int PendingDocuments { get; set; }
     public DateTime CreatedAt { get; set; }
+    public DriverCompletionDto? Completion { get; set; }
 }
 
 public class ReviewDocumentRequest

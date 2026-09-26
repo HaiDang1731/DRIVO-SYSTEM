@@ -13,7 +13,9 @@ public interface IBookingService
     Task<BaseResponse<BookingDetailResponse>> GetBookingByIdAsync(long bookingId, int userId);
     Task<BaseResponse<bool>> CancelBookingAsync(long bookingId, int userId, CancelBookingRequest request);
     Task<BaseResponse<bool>> CancelBookingByDriverAsync(long bookingId, int userId, CancelBookingRequest request);
+    Task<BaseResponse<bool>> KeepWaitingAsync(long bookingId, int userId);
     Task<BaseResponse<List<BookingDetailResponse>>> GetCustomerBookingsAsync(int userId, int page, int pageSize);
+    Task<BaseResponse<CustomerSummaryResponse>> GetCustomerSummaryAsync(int userId);
     Task<BaseResponse<List<VoucherResponse>>> GetAvailableVouchersAsync(int userId);
     Task<BaseResponse<CheckVoucherResponse>> CheckVoucherAsync(int userId, CheckVoucherRequest request);
 

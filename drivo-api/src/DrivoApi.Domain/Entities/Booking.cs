@@ -58,6 +58,10 @@ public class Booking
     public string? CancelledBy { get; set; }
     public string? CancellationReason { get; set; }
     public DateTime? CancelledAt { get; set; }
+    /// <summary>Lần hủy có tính lỗi tài xế không (trừ tỉ lệ hoàn thành).</summary>
+    public bool DriverAtFault { get; set; }
+    /// <summary>Tài xế xác nhận khách vẫn đi, tiếp tục chờ (đã qua thời gian chờ miễn phí).</summary>
+    public DateTime? WaitExtendedAt { get; set; }
     public string? CustomerNote { get; set; }
 
     public DateTime CreatedAt { get; set; }

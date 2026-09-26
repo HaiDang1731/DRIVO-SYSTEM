@@ -60,6 +60,14 @@ public class AdminDriverController(IAdminDriverService adminDriverService) : Con
         return result.Success ? Ok(result) : NotFound(result);
     }
 
+    /// <summary>Tỉ lệ hoàn thành 30 ngày + các lần hủy gần đây (có lý do, có tính lỗi tài xế không)</summary>
+    [HttpGet("{driverId}/completion")]
+    public async Task<IActionResult> GetCompletion(int driverId)
+    {
+        var result = await adminDriverService.GetDriverCompletionAsync(driverId);
+        return result.Success ? Ok(result) : NotFound(result);
+    }
+
     /// <summary>Admin xem danh sách tài xế, lọc theo VerificationStatus</summary>
     [HttpGet]
     public async Task<IActionResult> GetDrivers(

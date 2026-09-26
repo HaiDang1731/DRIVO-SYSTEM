@@ -45,6 +45,10 @@ public class UpdateProfileRequest
 {
     public string FullName { get; set; } = null!;
     public string? Email { get; set; }
+    /// <summary>SĐT mới (cũng là tên đăng nhập). Null = giữ nguyên.</summary>
+    public string? Phone { get; set; }
+    /// <summary>Bắt buộc khi đổi SĐT.</summary>
+    public string? CurrentPassword { get; set; }
 }
 
 public class ChangePasswordRequest

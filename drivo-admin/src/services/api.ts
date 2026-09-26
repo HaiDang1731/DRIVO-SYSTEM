@@ -8,6 +8,37 @@ export function apiFileUrl(path?: string | null): string {
   return BASE_URL.replace(/\/api\/v1$/, '') + path;
 }
 
+export interface WalletTx {
+  id: number;
+  driverId: number;
+  driverName?: string | null;
+  driverPhone?: string | null;
+  /** TOPUP | WITHDRAW | TRIP_CASH | TRIP_APP | ADJUSTMENT */
+  type: string;
+  amount: number;
+  balanceAfter?: number | null;
+  /** PENDING | COMPLETED | REJECTED */
+  status: string;
+  bookingId?: number | null;
+  bookingCode?: string | null;
+  referenceCode?: string | null;
+  note?: string | null;
+  createdAt: string;
+  processedAt?: string | null;
+}
+
+export interface WalletOverview {
+  minBalance: number;
+  totalBalance: number;
+  driversBelowMinimum: number;
+  pendingTopups: number;
+  pendingTopupAmount: number;
+  pendingWithdrawals: number;
+  pendingWithdrawAmount: number;
+  drivers: { driverId: number; fullName: string; phone: string; balance: number; belowMinimum: boolean; pendingRequests: number; driverStatus: string }[];
+  pendingRequests: WalletTx[];
+}
+
 /** Hồ sơ tài xế (khớp DriverProfileFields ở backend). */
 export interface DriverProfileFields {
   fullName?: string | null;
@@ -26,6 +57,25 @@ export interface DriverProfileFields {
   bankName?: string | null;
   bankAccountNumber?: string | null;
   bankAccountHolder?: string | null;
+}
+
+/** Tỉ lệ hoàn thành 30 ngày = hoàn thành / (hoàn thành + hủy do lỗi tài xế). rate null = chưa đủ dữ liệu. */
+export interface DriverCompletion {
+  completed: number;
+  driverFaultCancelled: number;
+  noFaultCancelled: number;
+  rate?: number | null;
+  windowDays: number;
+  minTrips: number;
+}
+
+export interface DriverCancellation {
+  bookingId: number;
+  bookingCode: string;
+  cancelledBy?: string | null;
+  reason?: string | null;
+  driverAtFault: boolean;
+  cancelledAt?: string | null;
 }
 
 // ── Typed DTOs (camelCase, see maps-contract.md) ──
@@ -112,6 +162,12 @@ export interface AdminBookingDetail {
   startedAt?: string | null;
   completedAt?: string | null;
   cancelledAt?: string | null;
+  cancelledBy?: string | null;
+  cancellationReason?: string | null;
+  /** Lần hủy có tính lỗi tài xế (trừ tỉ lệ hoàn thành) */
+  driverAtFault?: boolean;
+  /** Tài xế xác nhận tiếp tục chờ khách (sau thời gian miễn phí) */
+  waitExtendedAt?: string | null;
   driverLatitude?: number | null;
   driverLongitude?: number | null;
   driverLastLocationAt?: string | null;
@@ -211,6 +267,7 @@ export const api = {
     api.request(`/admin/drivers?${status ? `verificationStatus=${status}&` : ''}page=${page}&pageSize=${pageSize}`),
 
   getDriver: (id: string | number) => api.request(`/admin/drivers/${id}`),
+  getDriverCompletion: (id: string | number) => api.request(`/admin/drivers/${id}/completion`),
 
   /** Sửa hồ sơ tài xế: chỉ gửi trường cần đổi (chuỗi rỗng = xóa) */
   updateDriverProfile: (id: string | number, data: Partial<DriverProfileFields>) =>
@@ -224,6 +281,16 @@ export const api = {
 
   completeDriverReview: (id: string | number) =>
     api.request(`/admin/drivers/${id}/review-complete`, { method: 'POST' }),
+
+  // Ví tài xế
+  getWalletOverview: (): Promise<ApiResponse<WalletOverview>> => api.request('/admin/wallets'),
+  getDriverWalletTransactions: (driverId: number): Promise<ApiResponse<WalletTx[]>> =>
+    api.request(`/admin/wallets/drivers/${driverId}/transactions`),
+  approveWalletTx: (id: number) => api.request(`/admin/wallets/transactions/${id}/approve`, { method: 'POST' }),
+  rejectWalletTx: (id: number, reason: string) =>
+    api.request(`/admin/wallets/transactions/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  adjustWallet: (driverId: number, amount: number, note: string) =>
+    api.request(`/admin/wallets/drivers/${driverId}/adjust`, { method: 'POST', body: JSON.stringify({ amount, note }) }),
 
   createDriver: (data: object) =>
     api.request('/admin/drivers', { method: 'POST', body: JSON.stringify(data) }),

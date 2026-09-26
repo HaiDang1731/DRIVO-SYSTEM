@@ -22,6 +22,9 @@ public interface IAdminDriverService
     /// <summary>Admin lấy danh sách tài xế (có filter theo status)</summary>
     Task<BaseResponse<List<DriverListResponse>>> GetDriversAsync(string? verificationStatus, int page, int pageSize);
 
+    /// <summary>Tỉ lệ hoàn thành 30 ngày + các lần hủy gần đây của tài xế</summary>
+    Task<BaseResponse<DriverCompletionDetailDto>> GetDriverCompletionAsync(int driverId);
+
     /// <summary>Admin khóa / mở khóa tài khoản tài xế</summary>
     Task<BaseResponse<bool>> SetDriverAccountStatusAsync(int driverId, string status, int adminUserId);
 

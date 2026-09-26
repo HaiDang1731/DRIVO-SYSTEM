@@ -21,6 +21,7 @@ export function Sidebar({ user, onLogout }: SidebarProps) {
         { id: 'customers', label: 'Khách hàng', icon: '👥' },
         { id: 'bookings', label: 'Chuyến đi', icon: '📋' },
         { id: 'payments', label: 'Thanh toán', icon: '💳' },
+        { id: 'wallets', label: 'Ví tài xế', icon: '👛' },
       ]
     },
     {

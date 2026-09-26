@@ -54,7 +54,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 
 // SignalR
-builder.Services.AddSignalR();
+builder.Services.AddSignalR()
+    .AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new DrivoApi.WebApi.UtcDateTimeConverter()));
 
 // CORS (Permissive for development & testing Web App)
 builder.Services.AddCors(options =>
@@ -71,6 +72,7 @@ builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.Converters.Add(new DrivoApi.WebApi.UtcDateTimeConverter()); // giờ UTC luôn kèm Z
     });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -81,6 +83,7 @@ builder.Services.AddScoped<IAdminDashboardService, AdminDashboardService>();
 builder.Services.AddScoped<IAdminDriverService, AdminDriverService>();
 builder.Services.AddScoped<IDriverProfileService, DriverProfileService>();
 builder.Services.AddScoped<ICustomerVehicleService, CustomerVehicleService>();
+builder.Services.AddScoped<IDriverWalletService, DriverWalletService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
 
 // Bản đồ OpenStreetMap miễn phí (Photon / Nominatim / OSRM) — không cần API key. Cấu hình tùy chọn: "Maps".

@@ -218,6 +218,13 @@ class BookingDetail {
   final DateTime? arrivedAt;
   final DateTime? startedAt;
   final DateTime? completedAt;
+  // Hủy chuyến + chờ tại điểm đón
+  final String? cancelledBy;
+  final String? cancellationReason;
+  final DateTime? waitExtendedAt;
+  /// Phút chờ miễn phí và giá chờ/phút theo bảng giá admin cài đặt.
+  final int freeWaitingMin;
+  final double waitingPricePerMin;
   // Vị trí tài xế (khi đã có tài xế)
   final double? driverLatitude;
   final double? driverLongitude;
@@ -255,6 +262,11 @@ class BookingDetail {
     this.arrivedAt,
     this.startedAt,
     this.completedAt,
+    this.cancelledBy,
+    this.cancellationReason,
+    this.waitExtendedAt,
+    this.freeWaitingMin = 0,
+    this.waitingPricePerMin = 0,
     this.driverLatitude,
     this.driverLongitude,
     this.driverLastLocationAt,
@@ -299,6 +311,11 @@ class BookingDetail {
       arrivedAt: _toDt(j['arrivedAt']),
       startedAt: _toDt(j['startedAt']),
       completedAt: _toDt(j['completedAt']),
+      cancelledBy: j['cancelledBy'],
+      cancellationReason: j['cancellationReason'],
+      waitExtendedAt: _toDt(j['waitExtendedAt']),
+      freeWaitingMin: _toI(j['freeWaitingMin']) ?? 0,
+      waitingPricePerMin: _toD(j['waitingPricePerMin']) ?? 0,
       driverLatitude: _toD(j['driverLatitude']),
       driverLongitude: _toD(j['driverLongitude']),
       driverLastLocationAt: _toDt(j['driverLastLocationAt']),
@@ -379,6 +396,67 @@ class VoucherInfo {
     ];
     return parts.join(' · ');
   }
+}
+
+class WalletTx {
+  final int id;
+  /// TOPUP | WITHDRAW | TRIP_CASH | TRIP_APP | ADJUSTMENT
+  final String type;
+  final double amount;
+  final double? balanceAfter;
+  /// PENDING | COMPLETED | REJECTED
+  final String status;
+  final String? bookingCode;
+  final String? referenceCode;
+  final String? note;
+  final DateTime createdAt;
+
+  WalletTx.fromJson(Map<String, dynamic> j)
+      : id = _toI(j['id']) ?? 0,
+        type = j['type'] ?? '',
+        amount = _toD(j['amount']) ?? 0,
+        balanceAfter = _toD(j['balanceAfter']),
+        status = j['status'] ?? '',
+        bookingCode = j['bookingCode'],
+        referenceCode = j['referenceCode'],
+        note = j['note'],
+        createdAt = _utcToLocal(j['createdAt']) ?? DateTime.now();
+
+  String get typeLabel => switch (type) {
+        'TOPUP' => 'Nạp tiền',
+        'WITHDRAW' => 'Rút tiền',
+        'TRIP_CASH' => 'Chuyến tiền mặt · trừ hoa hồng',
+        'TRIP_APP' => 'Chuyến trả qua app · cộng thu nhập',
+        'ADJUSTMENT' => 'DRIVO điều chỉnh',
+        _ => type,
+      };
+}
+
+class WalletInfo {
+  final double balance;
+  final double minBalance;
+  final bool canTakeTrips;
+  final double withdrawable;
+  final String drivoBankName;
+  final String drivoAccountNumber;
+  final String drivoAccountHolder;
+  final String? payoutBankName;
+  final String? payoutAccountNumber;
+  final String? payoutAccountHolder;
+  final List<WalletTx> transactions;
+
+  WalletInfo.fromJson(Map<String, dynamic> j)
+      : balance = _toD(j['balance']) ?? 0,
+        minBalance = _toD(j['minBalance']) ?? 500000,
+        canTakeTrips = j['canTakeTrips'] ?? false,
+        withdrawable = _toD(j['withdrawable']) ?? 0,
+        drivoBankName = j['drivoBank']?['bankName'] ?? '',
+        drivoAccountNumber = j['drivoBank']?['accountNumber'] ?? '',
+        drivoAccountHolder = j['drivoBank']?['accountHolder'] ?? '',
+        payoutBankName = j['payoutBankName'],
+        payoutAccountNumber = j['payoutAccountNumber'],
+        payoutAccountHolder = j['payoutAccountHolder'],
+        transactions = ((j['transactions'] as List?) ?? []).map((x) => WalletTx.fromJson(x)).toList();
 }
 
 class EarningsTrip {
@@ -565,6 +643,13 @@ class DriverBooking {
   final String? voucherCode;
   final String? customerName;
   final String? customerPhone;
+  // Chờ tại điểm đón (quy tắc phí chờ theo bảng giá admin)
+  final DateTime? arrivedAt;
+  final DateTime? waitExtendedAt;
+  final int freeWaitingMin;
+  final double waitingPricePerMin;
+  final String? cancelledBy;
+  final String? cancellationReason;
 
   DriverBooking({
     required this.id,
@@ -601,6 +686,12 @@ class DriverBooking {
     this.voucherCode,
     this.customerName,
     this.customerPhone,
+    this.arrivedAt,
+    this.waitExtendedAt,
+    this.freeWaitingMin = 0,
+    this.waitingPricePerMin = 0,
+    this.cancelledBy,
+    this.cancellationReason,
   });
 
   bool get hasPickupCoords =>
@@ -633,6 +724,12 @@ class DriverBooking {
       voucherCode: j['voucherCode'],
       customerName: c is Map ? c['fullName'] : j['customerName'],
       customerPhone: c is Map ? c['phone'] : j['customerPhone'],
+      arrivedAt: _toDt(j['arrivedAt']),
+      waitExtendedAt: _toDt(j['waitExtendedAt']),
+      freeWaitingMin: _toI(j['freeWaitingMin']) ?? 0,
+      waitingPricePerMin: _toD(j['waitingPricePerMin']) ?? 0,
+      cancelledBy: j['cancelledBy'],
+      cancellationReason: j['cancellationReason'],
       id: j['id'],
       bookingCode: j['bookingCode'] ?? '',
       status: j['status'] ?? '',
@@ -917,11 +1014,18 @@ class ApiService {
   static Future<Map<String, dynamic>> getActiveBooking() => get('/bookings/active');
   static Future<Map<String, dynamic>> getBookingById(int id) => get('/bookings/$id');
   static Future<Map<String, dynamic>> rateDriver(int bookingId, int score, String comment) => post('/bookings/$bookingId/rate', {'score': score, 'comment': comment});
-  static Future<Map<String, dynamic>> cancelBooking(int id, String reason) => post('/bookings/$id/cancel', {'reason': reason});
+  static Future<Map<String, dynamic>> cancelBooking(int id, String reasonCode, [String? note]) =>
+      post('/bookings/$id/cancel', {'reasonCode': reasonCode, 'reason': note});
   static Future<Map<String, dynamic>> getCustomerHistory() => get('/bookings/customer-history');
 
   // Driver
   static Future<Map<String, dynamic>> getDriverProfile() => get('/driver/profile');
+
+  // Ví tài xế
+  static Future<Map<String, dynamic>> getWallet() => get('/driver/wallet');
+  static Future<Map<String, dynamic>> walletTopup(double amount) => post('/driver/wallet/topup', {'amount': amount});
+  static Future<Map<String, dynamic>> walletWithdraw(double amount) => post('/driver/wallet/withdraw', {'amount': amount});
+  static Future<Map<String, dynamic>> cancelWalletRequest(int id) => post('/driver/wallet/requests/$id/cancel', {});
 
   /// Đường dẫn file do API trả về ("/uploads/...") -> URL đầy đủ.
   static String fileUrl(String path) {
@@ -974,8 +1078,9 @@ class ApiService {
       post('/driver/bookings/$id/reject', {});
   static Future<Map<String, dynamic>> updateBookingStatus(int id, String status) =>
       post('/driver/bookings/$id/update-status', {'status': status});
-  static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reason) =>
-      post('/driver/bookings/$id/cancel', {'reason': reason});
+  static Future<Map<String, dynamic>> cancelBookingByDriver(int id, String reasonCode, [String? note]) =>
+      post('/driver/bookings/$id/cancel', {'reasonCode': reasonCode, 'reason': note});
+  static Future<Map<String, dynamic>> keepWaiting(int id) => post('/driver/bookings/$id/keep-waiting', {});
   static Future<Map<String, dynamic>> getDriverActiveBooking() =>
       get('/driver/bookings/active');
   /// period: day | week | month; date: ngày bất kỳ trong kỳ (giờ VN)

@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import { Toast } from '../components/Toast';
 import { Avatar } from '../components/Avatar';
 import { Badge } from '../components/Badge';
+import { CompletionRateCell } from '../components/CompletionRate';
 import { useNavigate } from 'react-router-dom';
 import { CreateDriverModal } from '../components/CreateDriverModal';
 import { VerifyModal } from '../components/VerifyModal';
@@ -99,6 +100,7 @@ export function DriversPage() {
                   <th>Hạng bằng</th>
                   <th>Xác minh</th>
                   <th>Hoạt động</th>
+                  <th title="30 ngày: hoàn thành / (hoàn thành + hủy do lỗi tài xế)">Tỉ lệ hoàn thành</th>
                   <th>Ngày tạo</th>
                   <th>Thao tác</th>
                 </tr>
@@ -139,6 +141,7 @@ export function DriversPage() {
                       )}
                     </td>
                     <td><Badge value={d.driverStatus} /></td>
+                    <td><CompletionRateCell c={d.completion} /></td>
                     <td>{new Date(d.createdAt).toLocaleDateString('vi-VN')}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 6 }}>
