@@ -75,7 +75,12 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.Converters.Add(new DrivoApi.WebApi.UtcDateTimeConverter()); // giờ UTC luôn kèm Z
     });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    // Dùng full type name để tránh conflict khi có class cùng tên ở khác namespace
+    // VD: Auth.ChangePasswordRequest vs Driver.ChangePasswordRequest
+    c.CustomSchemaIds(t => t.FullName?.Replace('+', '.') ?? t.Name);
+});
 
 // Application Services
 builder.Services.AddScoped<IAuthService, AuthService>();

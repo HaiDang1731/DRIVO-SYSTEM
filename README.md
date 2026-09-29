@@ -64,12 +64,151 @@ npm run dev
 ```
 Mở http://localhost:5173 và đăng nhập bằng tài khoản admin ở mục 4.
 
-**Cửa sổ 3: App mobile**
+### **Cửa sổ 3: App Mobile**
+
+Mở **Android Studio** để khởi động thiết bị chạy ứng dụng:
+* **Android Virtual Device (AVD):** chạy app trên thiết bị Android ảo.
+* **Thiết bị Android thật:** kết nối điện thoại với máy tính để test trực tiếp trên thiết bị.
+* **Web:** có thể chạy phiên bản Web trên trình duyệt để test giao diện và chức năng.
+
+> **Lưu ý về GPS:**
+> Android Emulator không có GPS vật lý nên không thể lấy vị trí GPS thực tế của máy tính. Khi cần test GPS thực tế, nên sử dụng **thiết bị Android thật**.
+> Với Emulator, có thể **cấu hình vị trí GPS giả lập** để test các chức năng liên quan đến vị trí.
+------------
+
+### **3.1. Kiểm tra thiết bị Flutter**
+
+Sau khi mở AVD hoặc kết nối điện thoại Android thật, chạy:
+
 ```powershell
-.\run-mobile.ps1 -Device web          # bản web: mở http://localhost:5001
-.\run-mobile.ps1 -Device <mã-máy>     # điện thoại Android thật (xem mã bằng: flutter devices)
+flutter devices
 ```
-Lần đầu build mất vài phút. Script tự dò IP mạng LAN của máy tính để điện thoại gọi được API. Điện thoại cần **dùng chung Wi-Fi** với máy tính. Khi app đang chạy, bấm `r` trong cửa sổ này để cập nhật sau khi sửa code.
+Ví dụ:
+
+```text
+4cc939c2       • Android  • Android  • Android 15 (Thiết bị thật)
+emulator-5554  • Android  • Android  • Android 15 (Máy ảo 1)
+emulator-5556  • Android  • Android  • Android 15 (Máy ảo 2)
+```
+---
+### **3.2. Cấu hình GPS cho Android Emulator**
+
+Có thể cấu hình vị trí GPS cho Emulator bằng **Extended Controls** của Android Studio.
+Trong cửa sổ Emulator:
+**`⋮` → `Extended Controls` → `Location`**
+
+Nhập:
+* **Latitude:** vĩ độ
+* **Longitude:** kinh độ
+
+Ví dụ vị trí trung tâm Hà Nội:
+
+```text
+Latitude:  21.0278
+Longitude: 105.8412
+```
+
+Sau đó nhấn **Set location** để áp dụng.
+Có thể kiểm tra lại vị trí bằng Google Maps hoặc chức năng lấy vị trí trong app DRIVO.
+
+#### Cấu hình GPS bằng PowerShell
+
+Có thể dùng ADB để đặt vị trí trực tiếp:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\sdk\platform-tools\adb.exe" `
+    -s emulator-5554 `
+    emu geo fix 105.8412 21.0278
+```
+> **Lưu ý:** `geo fix` nhận tham số theo thứ tự **Longitude → Latitude**.
+
+Ví dụ:
+
+```text
+Longitude: 105.8412
+Latitude:  21.0278
+```
+
+Nếu có nhiều Emulator, thay `emulator-5554` bằng mã thiết bị tương ứng:
+
+```powershell
+emulator-5554
+emulator-5556
+emulator-5558
+```
+
+Có thể kiểm tra danh sách thiết bị bằng:
+
+```powershell
+adb devices
+```
+
+hoặc:
+
+```powershell
+flutter devices
+```
+
+---
+
+### **3.3. Chạy ứng dụng Mobile**
+
+Sau khi thiết bị đã được khởi động và cấu hình GPS nếu cần:
+
+```powershell
+# Bản Web: mở http://localhost:5001
+.\run-mobile.ps1 -Device web
+
+# Android Emulator
+.\run-mobile.ps1 -Device emulator-5554
+
+# Android thật
+.\run-mobile.ps1 -Device <mã-máy>
+```
+Mã thiết bị có thể xem bằng:
+```powershell
+flutter devices
+```
+Ví dụ:
+```powershell
+.\run-mobile.ps1 -Device 4cc939c2
+```
+---
+### **3.4. Lưu ý khi chạy trên điện thoại Android thật**
+
+* Lần đầu build có thể mất vài phút.
+* Script sẽ tự động dò **IP LAN của máy tính** để điện thoại có thể gọi API.
+* Điện thoại và máy tính cần **kết nối cùng mạng Wi-Fi/LAN**.
+* Nếu API không kết nối được, kiểm tra IP máy tính và Firewall.
+* Khi app đang chạy, nhấn `r` trong cửa sổ terminal để **Hot Reload** sau khi sửa code.
+
+### **3.5. Chạy nhiều Emulator để test DRIVO**
+
+Có thể mở nhiều AVD cùng lúc:
+
+```text
+emulator-5554 → Tài xế 1
+emulator-5556 → Tài xế 2
+emulator-5558 → Khách Hàng
+```
+
+Sau đó đặt mỗi Emulator một vị trí GPS khác nhau để test chức năng **tìm và ghép tài xế gần khách hàng**.
+
+Ví dụ:
+
+```powershell
+# Tài xế 1
+.\run-mobile.ps1 -Device emulator-5554 -Lat 21.0278 -Lng 105.8412
+
+# Tài xế 2
+.\run-mobile.ps1 -Device emulator-5556 -Lat 21.0326 -Lng 105.8431
+
+# Khách hàng
+.\run-mobile.ps1 -Device emulator-5558 -Lat 21.0200 -Lng 105.8350
+```
+
+Lúc này mỗi Emulator sẽ gửi một vị trí khác nhau, thuận tiện để kiểm tra **GPS, khoảng cách và chức năng tìm tài xế gần nhất của DRIVO**.
+
 
 ## 4. Tài khoản
 

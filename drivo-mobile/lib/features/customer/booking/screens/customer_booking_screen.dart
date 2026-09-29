@@ -2088,27 +2088,30 @@ class _CustomerBookingScreenState extends State<CustomerBookingScreen>
 
               // Cước phí & Hủy
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Cước phí dự kiến', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B))),
-                      Text(
-                        _formatCurrency(b.estimatedPrice + b.pickupFee + b.waitingFee + b.extraDistanceFee - b.discount),
-                        style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFF0070E0)),
-                      ),
-                      if (b.pickupFee > 0 || b.waitingFee > 0)
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Cước phí dự kiến', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B))),
                         Text(
-                          [
-                            'Cước chuyến ${_formatCurrency(b.estimatedPrice)}',
-                            if (b.pickupFee > 0) 'phí đón ${_formatCurrency(b.pickupFee)}',
-                            if (b.waitingFee > 0) 'phí chờ ${_formatCurrency(b.waitingFee)}',
-                          ].join(' + '),
-                          style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B)),
+                          _formatCurrency(b.estimatedPrice + b.pickupFee + b.waitingFee + b.extraDistanceFee - b.discount),
+                          style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w800, color: const Color(0xFF0070E0)),
                         ),
-                    ],
+                        if (b.pickupFee > 0 || b.waitingFee > 0)
+                          Text(
+                            [
+                              'Cước chuyến ${_formatCurrency(b.estimatedPrice)}',
+                              if (b.pickupFee > 0) 'phí đón ${_formatCurrency(b.pickupFee)}',
+                              if (b.waitingFee > 0) 'phí chờ ${_formatCurrency(b.waitingFee)}',
+                            ].join(' + '),
+                            style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B)),
+                          ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(width: 8),
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: Color(0xFFEF4444)),
