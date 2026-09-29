@@ -153,7 +153,7 @@ export function DriversPage() {
                         <button className="btn btn-sm btn-ghost" onClick={() => navigate('/drivers/' + d.driverId)}>
                           Chi tiết
                         </button>
-                        <button className={`btn btn-sm ${d.accountStatus === 'Locked' ? 'btn-danger' : 'btn-success'}`}
+                        <button className={`btn btn-sm ${d.accountStatus === 'Locked' ? 'btn-success' : 'btn-danger'}`}
                           onClick={() => handleToggleLock(d)}>
                           {d.accountStatus === 'Locked' ? 'Mở khóa' : 'Khóa'}
                         </button>
